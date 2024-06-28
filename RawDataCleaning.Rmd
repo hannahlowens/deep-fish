@@ -1,0 +1,294 @@
+---
+title: "Raw Data Cleaning"
+author: "Hannah L. Owens"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Dropbox/DeepFishOccurrences/")
+```
+
+## Fitting data for use
+
+First, I read in the data, do some preliminary name cleaning, and see what we're working with.
+
+```{r read in data and do preliminary name cleaning}
+library(stringr)
+library(dplyr)
+library(terra)
+
+# Using raw search results because iDigBio processed data doesn't include latitude or longitude
+fishData <- read.csv("data/866ac026-5731-4ca2-bb51-7b154d7cde25/occurrence_raw.csv")
+
+# There are 187 columns in this nonsense. I'm getting rid of some.
+fishData <- fishData[, c("dwc.family", "dwc.genus", "dwc.scientificName",
+                         "dwc.verbatimDepth", "dwc.maximumDepthInMeters", 
+                         "dwc.minimumDepthInMeters", "dwc.decimalLongitude", 
+                         "dwc.decimalLatitude","dwc.year","dwc.month","dwc.day")]
+
+# Fix blanks
+fishData[fishData == ""] <- NA
+
+# Remove lines with no depth information whatsoever
+fishData <- fishData %>%
+  filter_at(vars(dwc.maximumDepthInMeters, dwc.minimumDepthInMeters, dwc.verbatimDepth), any_vars(!is.na(.)))
+
+# Cleaning names
+fishData$dwc.scientificName <- gsub(r"{\s*\([^\)]+\)}","",
+                                    as.character(fishData$dwc.scientificName))
+fishData$dwc.scientificName <- gsub("cf. ","",
+                                    as.character(fishData$dwc.scientificName))
+fishData$dwc.scientificName <- gsub("c. ","",
+                                    as.character(fishData$dwc.scientificName))
+fishData$dwc.scientificName <- word(fishData$dwc.scientificName, 1,2, sep=" ")
+fishData$dwc.genus <- str_to_title(word(fishData$dwc.genus, 1))
+
+fishData$dwc.family <- toupper(word(fishData$dwc.family, 1))
+fishData$dwc.family[fishData$dwc.family == "TRIGILIDAE"] <- "TRIGLIDAE"
+fishData$dwc.family[fishData$dwc.family == "ZENIONIDAE"] <- "ZENIONTIDAE"
+fishData$dwc.family[fishData$dwc.family == "CHAUNAEIDAE"] <- "CHAUNACIDAE"
+fishData$dwc.family[fishData$dwc.family == "ECHENEIDIDAE"] <- "ECHENEIDAE"
+fishData$dwc.family[fishData$dwc.family == "ELEOTRIDIDAE"] <- "ELEOTRIDAE"
+fishData$dwc.family[fishData$dwc.family == "ENGRAULIDIDAE"] <- "ENGRAULIDAE"
+fishData$dwc.family[fishData$dwc.family == "EPHIPPIDIDAE"] <- "EPHIPPIDAE"
+fishData$dwc.family[fishData$dwc.family == "GONOSTOMIDAE"] <- "GONOSTOMATIDAE"
+fishData$dwc.family[fishData$dwc.family == "MACRORHAMPHOSIDAE"] <- "MACRORAMPHOSIDAE"
+fishData$dwc.family[fishData$dwc.family == "MACROURIDAEX"] <- "MACROURIDAE"
+fishData$dwc.family[fishData$dwc.family == "MONOCENTRIDIDAE"] <- "MONOCENTRIDAE"
+fishData$dwc.family[fishData$dwc.family == "OPHICHTHYIDAE"] <- "OPHICHTHIDAE"
+fishData$dwc.family <- str_to_title(fishData$dwc.family)
+
+# Fills in missing genus if scientific name is present
+for (i in seq(1, nrow(fishData))){
+  species <- fishData$dwc.scientificName[i]
+  if(!is.na(species)){
+    if(str_detect(pattern = "Leptocephali", species)) fishData$dwc.scientificName[i] <- NA
+  }
+  genus <- fishData$dwc.genus[i]
+  if(!is.na(genus) && (genus == "Gen.")) genus <- NA
+  if(is.na(genus)){
+      sciName <- fishData$dwc.scientificName[i]
+      if(!is.na(sciName)){
+        genus <- word(sciName, 1)
+        if(!str_detect(string = genus, "idae")){
+          fishData$dwc.genus[i] <- genus
+        } else if(str_detect(string = genus, "idae")){
+          if(is.na(fishData$dwc.family[i])){
+            fishData$dwc.family[i] <- genus
+            fishData$dwc.genus[i] <- NA
+          }
+        }
+      }
+  }
+}
+
+fishData <- fishData %>%
+  filter_at(vars(dwc.genus, dwc.scientificName), all_vars(!is.na(.)))
+
+fishData <- arrange(fishData, dwc.family, 
+                    dwc.genus, dwc.scientificName)
+
+paste0("Number of families: ", 
+       length(unique(fishData$dwc.family)))
+paste0("Number of genera: ", 
+       length(unique(fishData$dwc.genus)))
+paste0("Number of species: ",
+       length(unique(fishData$dwc.scientificName)))
+
+paste0("Number of entries with no family: ", 
+       sum(is.na(fishData$dwc.family)))
+paste0("Number of entries with no genus: ", 
+       sum(is.na(fishData$dwc.genus)))
+paste0("Number of entries with no scientific name: ", 
+       sum(is.na(fishData$dwc.scientificName)))
+paste0("Number of entries with incomplete max/min depth data (pre-cleaning): ", 
+       sum(!complete.cases(fishData[,c("dwc.maximumDepthInMeters", 
+                                       "dwc.minimumDepthInMeters")])))
+```
+Some of the missing name data may be fixable, but that is best done by hand later. For example, in some cases a family is missing, but the scientific name is there, so it can be looked up.
+
+Next, I read in the data and clean the maximum and minimum depth columns, getting rid of units and converting depths  in feet or fathoms to meters. It is assumed that measurements without units are in meters.
+
+```{r process max and min depth values, message=FALSE, warning=FALSE}
+# Function to convert units
+convertUnits <- function(input, minMax = "both") {
+  # Nerfing
+  if (is.na(input)) return(NA)
+  if (!str_detect(input, regex("\\d"))) return(NA)
+  if (str_detect(input, "Inf")) return(NA)
+  if (str_length(gsub("\\D", "", input)) < 1) return(NA)
+  
+  # The business
+  input <- tolower(input)
+  input <- gsub(x = input, " ", "")
+  input <- gsub(x = input, "to", "-")
+  input <- gsub(x = input, "ca.", "")
+  units <- str_extract(input, "[cfkm]\\w*+")
+  input <- gsub(input, pattern = "\\s*\\D+$", replacement = "")
+  if(str_detect(string = input, pattern = "-", )){
+    input <- unlist(strsplit(input, "-"))
+    input <- input[!input == ""]
+    input <- suppressWarnings(as.numeric(input))
+    if(all(is.na(input))) return(NA)
+    input <- input[!is.na(input)]
+    if(minMax == "min") input <- min(input)
+    if(minMax == "max") input <- max(input)
+  }
+  
+  if(is.na(units)) return(suppressWarnings(as.numeric(input)))
+  
+  # Conversion
+  if (any(str_detect(string = units, pattern = c("feet", "ft", "'")))){
+    return(suppressWarnings(as.numeric(gsub("\\D", "", input)) * 0.3048))
+  }
+  if (any(str_detect(string = units, pattern = c("fm", "fms", "fathoms", "f")))){
+    return(suppressWarnings(as.numeric(gsub("\\D", "", input)) * 1.8288))
+  }
+  if (any(str_detect(string = units, pattern = c("cm")))){
+    return(suppressWarnings(as.numeric(gsub("\\D", "", input))/100))
+  }
+  if (any(str_detect(string = units, pattern = c("m", "meters")))){
+    return(suppressWarnings(as.numeric(gsub("\\D", "", input))))
+  }
+}
+
+# Loop through the rows
+for (i in 1:nrow(fishData)) {
+  max <- convertUnits(fishData$dwc.maximumDepthInMeters[i], minMax = "max")
+  min <- convertUnits(fishData$dwc.minimumDepthInMeters[i], minMax = "min")
+  range <- c(min, max)
+  
+  # Check for max/min inversion and assign to rightful place in the table
+  if (!all(is.na(range))){
+    fishData$dwc.maximumDepthInMeters[i] <- max(c(max, min), na.rm = TRUE)
+    fishData$dwc.minimumDepthInMeters[i] <- min(c(max, min), na.rm = TRUE)
+  }
+}
+
+paste0("Number of entries with incomplete max/min depth data (post-cleaning): ", 
+       sum(!complete.cases(fishData[,c("dwc.maximumDepthInMeters", 
+                                       "dwc.minimumDepthInMeters")])))
+```
+
+Next, for species without maximum and/or minimum depths, we try to extract additional information from the verbatim depth data. Assumptions again include assuming depths with no unit are in meters, and that if both maximum and minimum depths already existed, they are more accurate than the verbatim depth.
+
+``` {r process verbatim depths}
+fishData[fishData == "Inf"] <- NA
+fishData[fishData == "-Inf"] <- NA
+
+# Mining verbatim depth for precious missing information
+for (i in 1:nrow(fishData)){
+  max <- fishData$dwc.maximumDepthInMeters[i]
+  min <- fishData$dwc.minimumDepthInMeters[i]
+  if(any(is.na(c(min,max)))){
+    input <- fishData$dwc.verbatimDepth[i]
+    output <- convertUnits(input, minMax = "both")
+    range <- c(min, max, output)
+    if(!all(is.na(range))){
+      fishData$dwc.maximumDepthInMeters[i] <- max(range, na.rm=TRUE)
+      fishData$dwc.minimumDepthInMeters[i] <- min(range, na.rm=TRUE)
+    }
+  }
+}
+
+paste0("Number of entries with incomplete max/min depth data (post-mining): ", 
+       sum(!complete.cases(fishData[,c("dwc.maximumDepthInMeters", 
+                                       "dwc.minimumDepthInMeters")])))
+```
+Ok, great, we now have more complete depth range records than we started with.
+
+The next step is to remove all the occurrences that are outside of the ocean or have recorded depths that are deeper than 99% of the depth of a given pixel. We chose 99% to remove occurrences with depths that exceed the known depth at a given pixel, but also to account for potential noise in the bathymetry data.
+
+```{r filter records without coordinates or inappropriate depths}
+# Get depth
+bathymetry <- rast("data/ETOPO_2022_v1_60s_N90W180_bed.tif")
+names(bathymetry) <- "bathymetry"
+bathymetry[bathymetry > 0] <- NA
+bathymetry <- abs(bathymetry)
+
+# Filter out points without coordinates
+fishData <- fishData %>% filter(!is.na(dwc.maximumDepthInMeters), 
+                                !is.na(dwc.decimalLongitude), 
+                                !is.na(dwc.decimalLatitude))
+
+paste0("Number of entries with complete max depth data and occurrence coordinates: ", 
+       nrow(fishData))
+
+# Filter out points that are deeper than bathymetry
+fishData$mapDepth <- round(terra::extract(bathymetry,
+                                             as.matrix(fishData[,c("dwc.decimalLongitude", 
+                                                                   "dwc.decimalLatitude")]),
+                                             method = "bilinear"),0)
+  
+# Get rid of depths that are deeper or at the same depth as bathymetry
+fishData <- fishData[(as.numeric(fishData$dwc.maximumDepthInMeters)/fishData$mapDepth) < 0.999,]
+
+paste0("Number of entries with maximum depths that do not exceed actual depth at occurrence: ", 
+       nrow(fishData))
+```
+
+Finally, I calculate a column with a single depth measurement--the median between minimum and maximum depth. In cases where only the minimum or maximum are given, this number is used. I then save the .csv file so it is not necessary to repeat the analysis.
+
+```{r calculate median depth column, dev='png'}
+fishData$depth <- (as.numeric(fishData$dwc.maximumDepthInMeters) + 
+                     as.numeric(fishData$dwc.minimumDepthInMeters))/2
+for(i in 1:nrow(fishData)){
+  if(is.na(fishData$depth[i])){
+    if(!is.na(fishData$dwc.minimumDepthInMeters[i])){
+      fishData$depth[i] <- as.numeric(fishData$dwc.minimumDepthInMeters[i])
+    } else if(!is.na(fishData$dwc.maximumDepthInMeters[i])){
+      fishData$depth[i] <- as.numeric(fishData$dwc.maximumDepthInMeters[i])
+    }
+  }
+}
+fishData$dwc.maximumDepthInMeters <- round(as.numeric(fishData$dwc.maximumDepthInMeters))
+fishData$dwc.minimumDepthInMeters <- round(as.numeric(fishData$dwc.minimumDepthInMeters))
+fishData$depth <- round(fishData$depth)
+summary(fishData$depth)
+
+# Get rid of zero depths and NAs
+fishData <- fishData[fishData$depth > 0,]
+fishData <- fishData[!is.na(fishData$depth),]
+
+hist(fishData$depth, main = "Occurrences by Depth")
+
+colnames(fishData) <- gsub("\\.", "_", colnames(fishData))
+
+missingFamilies <- fishData[is.na(fishData$dwc_family),]
+missingFamilies <- do.call(data.frame,missingFamilies)
+write.csv(missingFamilies, "data/missingFamilies.csv", row.names = F)
+
+fishData <- do.call(data.frame,fishData)
+write.csv(fishData, 
+          "data/processedFishDataWithDates.csv", 
+          row.names = F)
+
+paste0("There are ", nrow(fishData), " entries in the dataset.")
+```
+
+As mentioned at the beginning of this analysis, several records had no family provided. These records were reviewed by R. Singer, who also flagged several instances of illegitimate species names. In this final step, I mapped his feedback back into the dataset.
+
+```{r map Singer feedback, dev='png'}
+fishData <- read.csv("data/processedFishDataWithDates.csv")
+singerFeedback <- read.csv("missingFamilies_RandyReview.csv")
+
+for (i in 1:nrow(singerFeedback)){
+  update <- singerFeedback[i,]
+  fishData[fishData$dwc_scientificName == update$was,1:3] <- update[1:3]
+}
+
+fishData <- fishData[complete.cases(fishData$dwc_family),]
+fishData <- do.call(data.frame,fishData)
+write.csv(fishData, 
+          "data/processedFishDataWithDatesAndNames.csv", 
+          row.names = F)
+
+paste0("There are ", nrow(fishData), " entries in the dataset.")
+paste0("There are ", length(unique(fishData$dwc_scientificName)), 
+       " species in the dataset.")
+```
