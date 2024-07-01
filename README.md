@@ -1,9 +1,15 @@
-# PieridaeDiversity
+# Supplemental Material
 Scripts for "Exploring trends in deep sea fish community structure reveals a mosaic of biodiversity across depth".
 
-* `Occurrence_Search.R` reads a `.txt` list of taxa, searches the Global Biodiversity Information Facility (GBIF) database for occurrences for every species in the list, and generates citations for the occurrence data in accordance with GBIF's recommendations for best citation practices.
+## Raw Data Cleaning
+This page shows how the raw data downloaded from iDigBio (link) were processed prior to analysis.
+* [Code here](https://github.com/hannahlowens/deep-fish/blob/main/RawDataCleaning.Rmd)
 
-* `VisualizingOccurrencesForCheck.R` automatically reads all occurrence `.csv` files in a specified folder, rounds occurrence coordinates to four decimal points, removes duplicate results, and creates a `.pdf` atlas of clearn occurrences for each species.
+## Global Analysis
+We started with a global analysis of the dataset to identify areas that were well-sampled for further examination.
+* [Code here]
 
-* `Data_extraction_clean.R` reads in all occurrence `.csv` files and an environmental data file, extracts environmental data at all points, and writes the results to a new `.csv` file.
+## Gulf of Mexico Analysis
+The Gulf of Mexico was particularly densely sampled in the iDigBio dataset. We focused on this area to investigate finer-scale depth-structured patterns of fish diversity.  
+* [Code here](https://github.com/hannahlowens/deep-fish/blob/main/GOM_Biodiversity.Rmd)
 
