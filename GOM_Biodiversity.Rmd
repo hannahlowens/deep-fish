@@ -1,12 +1,13 @@
 ---
-title: "Deep Fish Biodiversity Patterns"
+title: "Fish Biodiversity Patterns"
+subtitle: "Gulf of Mexico Results"
 author: "Hannah L. Owens"
 date: "`r Sys.Date()`"
 output:
   html_document:
-    df_print: paged
+    toc: true
+    toc_float: true
   pdf_document: default
-subtitle: Gulf of Mexico Results
 ---
 
 ```{r setup, include=FALSE}
@@ -59,7 +60,7 @@ theme_Publication <- function(base_size=10, base_family="sans") {
 }
 ```
 
-## Getting the data
+# Readying the data
 
 Read in data and trim occurrences to area of interest--the Gulf of Mexico.
 
@@ -99,11 +100,9 @@ pointMap(as.data.frame(geom(fishData)),
          land = land)
 ```
 
-## Mapping
+# Mapping
 
-How about we do it as a fancy hexagon-based density map? This was originally adapted from <https://strimas.com/post/hexagonal-grids/>.
-
-First, we have to set things up by making a hexagon grid.
+First, we have to set things up by making a hexagon grid to aggregate the data. This was adapted and updated from <https://strimas.com/post/hexagonal-grids/>.
 
 ```{r hex map, warning = FALSE}
 # "EPSG:6579 NAD83(2011) / Texas-Centric Albers Equal Area"
@@ -120,7 +119,9 @@ GOM <- vect(HexPols2)
 crs(GOM) <- crs(land)
 ```
 
-Now, how about that sampling density?
+## Sampling Density
+
+How many records are there in each hexagonal cell?
 
 ```{r sampling density}
 # Gridding it
@@ -162,7 +163,8 @@ ggplot() +
 #dev.off()
 ```
 
-Highlighting under-sampled regions/depth of ocean - percentage of "available depth" for sampling from our occurrences.
+## Depth Coverage
+This map highlights regions of the ocean with differing depth coverage of sampling effort - specifically the percentage of "available depth" in each hexagon covered by records in iDigBio.
 
 ```{r depth sampling, warning=FALSE}
 # Get bathymetery
@@ -211,7 +213,7 @@ ggplot() +
 #dev.off()
 ```
 
-## Depth vs Diversity
+# Diversity Pattern Analyses
 
 First, we do some additional filtering to fit the data for our use, including removing records with excessive (i.e. 100m) uncertainty in depth.
 
@@ -226,7 +228,7 @@ fishData <- fishData[str_detect(fishData$dwc_scientificName, "species", negate =
 print(paste0("After removing records that were not identified to species, there are ", nrow(fishData), " records."))
 ```
 
-Here is where the bins are calculated.
+Next, we assign each record to equal-width depth bins under two strategies: 1) No empty bins permitted, 2) At least 10 records per bin.
 
 ```{r determining bin number}
 # Zero empty bins
@@ -261,7 +263,9 @@ paste0("Number of bins if each bin must have at least 10 observations: ",
 rm(tmp, breakNumber, test)
 ```
 
-Next, I defined a function to calculate diversity statistics we need for downstream analysis.
+## Calculate diversity statistics
+
+Next, we define a function to calculate diversity statistics we need for downstream analysis.
 
 ```{r define function to calculate bin stats, fig.show='hide', message=FALSE, warning=FALSE}
 fishData <- data.frame(fishData)
@@ -354,20 +358,11 @@ zeroEmpty <- diversityStats(x = fishData, binNumber = zeroEmpty)
 tenPerBin <- diversityStats(x = fishData, binNumber = tenPerBin)
 ```
 
-How do estimates of depth vs diversity change with bin size? I plotted lines at 200m and 1000m, which are commonly-used definitions for epipelagic and mesopelagic zone boundaries, respectively.
+## Alpha diversity vs depth
+
+For each binning strategy, we initially plotted diversity at depth. We include lines at 200m and 1000m, which are commonly-used boundaries for epipelagic and mesopelagic zone boundaries, respectively.
 
 ```{r depth vs diversity}
-# Regular histogram
-hist(zeroEmpty$data$depth, 
-     main = paste0("Records vs Depth\nNo Empty Bins (", 
-                   zeroEmpty$binNumber, " Bins)"), 
-     breaks = zeroEmpty$breaks, xlab = "Depth (m)")
-
-hist(tenPerBin$data$depth, 
-     main = paste0("Records vs Depth\nAt Least 10 per Bin (", 
-                   tenPerBin$binNumber, " Bins)"), 
-     breaks = tenPerBin$breaks, xlab = "Depth (m)")
-
 # Plot diversity by depth
 plot(cbind(zeroEmpty$breaks[-(length(zeroEmpty$breaks))], 
            zeroEmpty$depthDiversityCount), 
@@ -386,9 +381,12 @@ abline(v = 200, col = "darkred", lty = "dashed")
 abline(v = 1000, col = "darkred", lty = "dashed")
 ```
 
-Next, we calculate number of records and area covered by each bin.
 
-```{r Sampling effort versus alpha taxonomy}
+## Null Model for Diversity
+
+How does the observed distribution of diversity compare to a null distribution? That is, what if any observation was equally likely to be found in each depth bin--do we see the same distribution of diversity?
+
+```{r null diversity test}
 calcEffortAndAlpha <-function(rawData){
   effortAndAlpha <- data.frame(table(rawData$data$depthBin))
   for(i in 1:nrow(effortAndAlpha)){
@@ -400,24 +398,6 @@ calcEffortAndAlpha <-function(rawData){
   return(effortAndAlpha)
 }
 
-effortAndAlpha <-calcEffortAndAlpha(tenPerBin)
-
-effortAndAlpha$availableArea <- NA
-gomBath <- mask(x = bathymetry, mask= gomShapefile)
-cellBath <- cellSize(gomBath, unit = "km")
-for (i in 1:nrow(effortAndAlpha)){
-  depths <- as.numeric(unlist(strsplit(as.character(effortAndAlpha$Depth[i]), 
-                                       " to ")))
-  effortAndAlpha$availableArea[i] <- unlist(global(((gomBath < -(depths[1])) * cellBath), 
-                                                   sum, na.rm = T))
-}
-```
-
-### Null Model for Diversity
-
-How does the observed distribution of diversity compare to a null distribution? That is, what if any observation was equally likely to be found in each depth bin--do we see the same distribution of diversity?
-
-```{r null diversity test}
 # Simulate data
 fishDatSim <- tenPerBin
 fishDatSim$data <- fishDatSim$data[!is.na(fishDatSim$data$depthBin),]
@@ -428,6 +408,9 @@ fishDatSim <- lapply(1:100, FUN = function(x) {
 # Calculate alpha
 allDat <- lapply(fishDatSim, 
                  FUN = function(x) calcEffortAndAlpha(x))
+
+effortAndAlpha <-calcEffortAndAlpha(tenPerBin)
+
 # Plot sims and obs
 P1 <- ggplot()
 medProp <- c()
@@ -452,10 +435,27 @@ finalPlot
 
 ggsave("Figures/DiversityObsVsSimGOM.png",finalPlot,height = 8.7, width = 11.4, units = "cm")
 ```
+## Possible correlates with alpha diversity
+
+### Number of records and area covered
+
+Of course, there are plenty of non-biological reasons diversity might decrease with depth. Two of our hypothesized correlations were decreased sampling effort and amount of available area as depth increases.
+
+```{r Sampling effort versus alpha taxonomy}
+effortAndAlpha$availableArea <- NA
+gomBath <- mask(x = bathymetry, mask= gomShapefile)
+cellBath <- cellSize(gomBath, unit = "km")
+for (i in 1:nrow(effortAndAlpha)){
+  depths <- as.numeric(unlist(strsplit(as.character(effortAndAlpha$Depth[i]), 
+                                       " to ")))
+  effortAndAlpha$availableArea[i] <- unlist(global(((gomBath < -(depths[1])) * cellBath), 
+                                                   sum, na.rm = T))
+}
+```
 
 ### Correlation between clines and diversity
 
-It was suggested by my colleague, Katherine Richardson, that the bump in the diversity decay curve could be the result of thermoclines and/or pycnoclines. I used temperature and salinity data from the World Ocean Atlas 2018 dataset to investigate this idea, extracting mean temperature and salinity for each depth bin and comparing it to diversity. While I was at it, I also looked at apparent oxygen utilization and nitrogen concentration.
+It was suggested by Katherine Richardson, Owens's colleague at the University of Copenhagen, that the bump in the diversity decay curve could be the result of thermoclines and/or pycnoclines. We used temperature and salinity data from the World Ocean Atlas 2018 dataset to investigate this idea, extracting mean temperature and salinity for each depth bin and comparing it to diversity. We also examined apparent oxygen utilization and nitrogen concentration as potential correlates, as these variables are also available via the WOA 2018 dataset and may be correlated with diversity.
 
 ```{r environmental variable extraction}
 # Define extraction function
@@ -502,7 +502,13 @@ effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/Proces
   crop(gomShapefile) %>% 
   mask(mask = gomShapefile) %>% 
   envDatExtract(mShp = gomShapefile, breaks = tenPerBin$breaks)
+```
 
+### Plotting
+
+Finally, we plot alpha diversity and its hypothesized correlates to identify emergent trends.
+
+```{r, fig.height = 10}
 effortAndAlphaLong <- reshape2::melt(effortAndAlpha[,c("Depth", "Alpha", 
                                                         "Count", "Available Area",
                                                         "Temperature", "Salinity", 
@@ -522,9 +528,36 @@ P1
 ggsave("Figures/GOMClines.png",P1,height = 22.5, width = 8.7, units = "cm")
 ```
 
-### Cluster analysis
+# Summary statistics for Gulf of Mexico analysis
 
-Next, we calculate how similar the bins are by standardizing the data to a presence/absence matrix, then calculating Chao similarity.
+Finally, here are some sampling stats.
+
+```{r a few summary stats, echo=FALSE}
+print(paste0("There are ", length(unique(fishData$dwc_scientificName)), 
+             " species in the GOM dataset."))
+
+print(paste0("There are ", nrow(GOM), 
+             " cells in the GOM dataset."))
+print(paste0(nrow(GOM[GOM$counts > 9]), 
+             " cells in the GOM dataset have at least 10 records."))
+print(paste0(nrow(GOM[GOM$counts > 99]), 
+             " cells in the GOM dataset have at least 100 records."))
+
+print(paste0(nrow(GOM[GOM$bathymetry <= -200]), 
+             " cells in the GOM dataset have bathymetry at or exceeding 200m."))
+GOMFiltered <- GOM %>% filter(bathymetry <= -200) %>% 
+    filter(maxSample <= -200) 
+print(paste0(nrow(GOMFiltered), 
+             " GOM cells (", round((nrow(GOMFiltered)/nrow(GOM))*100, digits = 0), "%) have bathymetry at or exceeding 200m AND have at least one record from at or below 200m."))
+```
+
+# Appendix: Additional analyses 
+
+The following analyses were also initially performed, but were not conclusive enough to include in the final manuscript. We include them here should they prove useful to other researchers with similar questions.
+
+## Cluster analysis
+
+One of the first questions we were interested in addressing with this dataset was whether there was clear community structure with depth. We calculated how similar the species assemblages in each bin were by standardizing the data to a presence/absence matrix, then calculating Chao similarity. The results are plotted as a dendrogram, where shorter branches between tips indicate more similarity between bins. 
 
 ```{r dendrogram plots}
 # How do they cluster?
@@ -540,6 +573,7 @@ plot(tenPerBin$clust.res,
 rect.hclust (tenPerBin$clust.res, k = 2)
 rect.hclust (tenPerBin$clust.res, k = 3, border = "blue")
 ```
+
 
 Next we take the pairwise similarity scores of the bins, and perform multidimensional scaling so that the distances between points are approximately equal to their dissimilarity.
 
@@ -574,11 +608,11 @@ plotDiversityZeroEmpty <- ggplot() +
                    aes(x=axis1, y=axis2, 
                        colour=zeroEmpty$env.data, 
                        fill=after_scale(alpha(colour, 0.2))), 
-                   concavity=0.1, size=0.2, show.legend=FALSE) +
+                   concavity=0.1, linewidth=0.2, show.legend=FALSE) +
     geom_segment(data=zeroEmpty$centroids.long, 
                  aes(x=axis1c, y=axis2c, xend=axis1, 
                      yend=axis2, colour=zeroEmpty$env.data), 
-                 size=1, show.legend=FALSE) +
+                 linewidth=1, show.legend=FALSE) +
     geom_point(data=zeroEmpty$sites.long, 
                aes(x=axis1, y=axis2, colour=zeroEmpty$env.data, 
                    shape=zeroEmpty$env.data), 
@@ -618,41 +652,20 @@ plotDiversityZeroEmpty
 plotDiversityTenPerBin
 ```
 
-Yeah, ok. So both bin schemes show two distinct clusters. Which bins are in these groups?!
+Both bin schemes show two distinct clusters. Which bins are in these groups?!
 
 ```{r bin group identities,  echo = FALSE}
 print("Cluster identities for each bin, no empty bins are permitted:")
-zeroEmpty$clusters$cluster
+t(t(zeroEmpty$clusters$cluster))
 
 print("Cluster identities for each bin, minimum of ten records per bin:")
-tenPerBin$clusters$cluster
+t(t(tenPerBin$clusters$cluster))
 ```
 
-Finally, are there any species that associate with one or the other of the depth clusters we have identified? To to this, we use `multipatt()`, an implementation of metrics developed in De Cáceres and Legendre (2009).
+## Identity test
+
+Finally, are there any species that clearly and signifcantly associate with one or the other of the depth clusters we have identified? To to this, we use `multipatt()`, an implementation of metrics developed in De Cáceres and Legendre (2009).
 
 ```{r multipatt() results}
 tenPerBin$spClusters[tenPerBin$spClusters$p.value < 0.01,]
-```
-
-# Summary sampling statistics for Gulf of Mexico analysis
-
-Finally, here are some sampling stats.
-
-```{r a few summary stats, echo=FALSE}
-print(paste0("There are ", length(unique(fishData$dwc_scientificName)), 
-             " species in the dataset."))
-
-print(paste0("There are ", nrow(GOM), 
-             " cells in the GOM dataset."))
-print(paste0(nrow(GOM[GOM$counts > 9]), 
-             " cells in the GOM dataset have at least 10 records."))
-print(paste0(nrow(GOM[GOM$counts > 99]), 
-             " cells in the GOM dataset have at least 100 records."))
-
-print(paste0(nrow(GOM[GOM$bathymetry <= -200]), 
-             " cells in the GOM dataset have bathymetry at or exceeding 200m."))
-GOMFiltered <- GOM %>% filter(bathymetry <= -200) %>% 
-    filter(maxSample <= -200) 
-print(paste0(nrow(GOMFiltered), 
-             " cells have bathymetry at or exceeding 200m AND have at least one record from at or below 200m."))
 ```

@@ -4,7 +4,8 @@ author: "Hannah L. Owens"
 date: "`r Sys.Date()`"
 output:
   html_document:
-    df_print: paged
+    toc: true
+    toc_float: true
   pdf_document: default
 ---
 
@@ -13,19 +14,19 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_knit$set(root.dir = "~/Dropbox/DeepFishOccurrences/")
 ```
 
-## Fitting data for use
+# Processing inputs
 
-First, I read in the data, do some preliminary name cleaning, and see what we're working with.
+First, I read in the data and do some preliminary name cleaning and assessment.
 
 ```{r read in data and do preliminary name cleaning}
 library(stringr)
 library(dplyr)
 library(terra)
 
-# Using raw search results because iDigBio processed data doesn't include latitude or longitude
+# Using raw search results; iDigBio processed data does not include latitude or longitude
 fishData <- read.csv("data/866ac026-5731-4ca2-bb51-7b154d7cde25/occurrence_raw.csv")
 
-# There are 187 columns in this nonsense. I'm getting rid of some.
+# There are 187 columns in the raw dataset. I select the relevant ones for our purposes.
 fishData <- fishData[, c("dwc.family", "dwc.genus", "dwc.scientificName",
                          "dwc.verbatimDepth", "dwc.maximumDepthInMeters", 
                          "dwc.minimumDepthInMeters", "dwc.decimalLongitude", 
@@ -34,7 +35,7 @@ fishData <- fishData[, c("dwc.family", "dwc.genus", "dwc.scientificName",
 # Fix blanks
 fishData[fishData == ""] <- NA
 
-# Remove lines with no depth information whatsoever
+# Remove records with no depth information whatsoever
 fishData <- fishData %>%
   filter_at(vars(dwc.maximumDepthInMeters, dwc.minimumDepthInMeters, dwc.verbatimDepth), any_vars(!is.na(.)))
 
@@ -117,13 +118,13 @@ Next, I read in the data and clean the maximum and minimum depth columns, gettin
 ```{r process max and min depth values, message=FALSE, warning=FALSE}
 # Function to convert units
 convertUnits <- function(input, minMax = "both") {
-  # Nerfing
+  # Error checking
   if (is.na(input)) return(NA)
   if (!str_detect(input, regex("\\d"))) return(NA)
   if (str_detect(input, "Inf")) return(NA)
   if (str_length(gsub("\\D", "", input)) < 1) return(NA)
   
-  # The business
+  # Process input
   input <- tolower(input)
   input <- gsub(x = input, " ", "")
   input <- gsub(x = input, "to", "-")
@@ -202,6 +203,8 @@ paste0("Number of entries with incomplete max/min depth data (post-mining): ",
 ```
 Ok, great, we now have more complete depth range records than we started with.
 
+# Filtration
+
 The next step is to remove all the occurrences that are outside of the ocean or have recorded depths that are deeper than 99% of the depth of a given pixel. We chose 99% to remove occurrences with depths that exceed the known depth at a given pixel, but also to account for potential noise in the bathymetry data.
 
 ```{r filter records without coordinates or inappropriate depths}
@@ -271,6 +274,8 @@ write.csv(fishData,
 paste0("There are ", nrow(fishData), " entries in the dataset.")
 ```
 
+# Manual Taxonomic Review
+
 As mentioned at the beginning of this analysis, several records had no family provided. These records were reviewed by R. Singer, who also flagged several instances of illegitimate species names. In this final step, I mapped his feedback back into the dataset.
 
 ```{r map Singer feedback, dev='png'}
@@ -287,7 +292,13 @@ fishData <- do.call(data.frame,fishData)
 write.csv(fishData, 
           "data/processedFishDataWithDatesAndNames.csv", 
           row.names = F)
+```
 
+# Final results
+
+Here is what was left at the end of processing, ready for analysis.
+
+```{r}
 paste0("There are ", nrow(fishData), " entries in the dataset.")
 paste0("There are ", length(unique(fishData$dwc_scientificName)), 
        " species in the dataset.")
