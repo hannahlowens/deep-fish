@@ -528,7 +528,7 @@ P1
 ggsave("Figures/GOMClines.png",P1,height = 22.5, width = 8.7, units = "cm")
 ```
 
-# Summary statistics for Gulf of Mexico analysis
+# Summary statistics
 
 Finally, here are some sampling stats.
 

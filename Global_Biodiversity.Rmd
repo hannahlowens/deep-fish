@@ -192,7 +192,7 @@ ggplot() +
 #dev.off()
 ```
 
-# Summary statistics for Gulf of Mexico analysis
+# Summary statistics
 
 Finally, here are some sampling stats.
 
@@ -413,18 +413,19 @@ crs(world) <- crs("epsg:4326")
 effortAndAlpha$Temperature <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = tenPerBin$breaks)
+  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
 effortAndAlpha$Salinity <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = tenPerBin$breaks)
+  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
 effortAndAlpha$AOU <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
+  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
 effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = tenPerBin$breaks)
+  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
 ```
 
 Finally, we plotted the result. 
