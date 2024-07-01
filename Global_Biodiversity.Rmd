@@ -1,0 +1,450 @@
+---
+title: "Fish Biodiversity Patterns"
+subtitle: "Global Results"
+author: "Hannah L. Owens"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(sf)
+library(terra)
+library(latticeExtra)
+library(ggplot2)
+library(vegan)
+library(ggforce)
+library(voluModel)
+library(tidyterra)
+library(metR)
+library(indicspecies)
+library(stringr)
+library(ggpubr)
+library(grid)
+library(ggthemes)
+
+sf::sf_use_s2(FALSE)
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Dropbox/DeepFishOccurrences/")
+
+theme_Publication <- function(base_size=10, 
+                              base_family="sans") {
+      (theme_foundation(base_size=base_size, 
+                        base_family=base_family) + 
+         theme(plot.title = element_text(face = "bold",
+                                         size = rel(1.2), 
+                                         hjust = 0.5, 
+                                         margin = margin(0,0,20,0)),
+               text = element_text(),
+               panel.background = element_rect(colour = NA),
+               plot.background = element_rect(colour = NA),
+               panel.border = element_rect(colour = NA),
+               axis.title = element_text(face = "bold",
+                                         size = rel(1)),
+               axis.title.y = element_text(angle=90,vjust =2),
+               axis.title.x = element_text(vjust = -0.2),
+               axis.text = element_text(), 
+               axis.line.x = element_line(colour="black"),
+               axis.line.y = element_line(colour="black"),
+               axis.ticks = element_line(),
+               panel.grid.major = element_line(colour="#f0f0f0"),
+               panel.grid.minor = element_blank(),
+               legend.title = element_text(face="italic"),
+               plot.margin=unit(c(10,5,5,5),"mm"),
+               strip.background=element_rect(colour="#f0f0f0",
+                                             fill="#f0f0f0"),
+               strip.text = element_text(face="bold")
+       ))
+}
+```
+
+# Readying the data
+
+Read in data.
+
+```{r read in data}
+fishData <- read.csv("data/processedFishDataWithDatesAndNames.csv")
+```
+
+# Mapping
+
+## Simple point map
+
+First, a regular point map of all records. 
+
+```{r sampling map, warning=FALSE}
+fishHorizonComplete <- fishData %>%
+  select(-c("dwc_year", "dwc_month", "dwc_day")) %>% 
+  drop_na()
+
+# Get rid of overland points
+fishHorizonComplete <- vect(fishHorizonComplete, 
+                            geom = c("dwc_decimalLongitude", 
+                                     "dwc_decimalLatitude"))
+crs(fishHorizonComplete) <- crs("epsg:4326")
+land <- vect(rnaturalearth::ne_countries(scale = "small", 
+                                         returnclass = "sf")[1])
+land <- aggregate(land)
+landFish <- is.related(fishHorizonComplete, land, "within")
+fishHorizonComplete <- fishHorizonComplete[!landFish,]
+
+pointMap(as.data.frame(geom(fishHorizonComplete)), 
+         spName = "'All' Marine Fish Occurrences in iDigBio",
+         land = land)
+fishData <- fishHorizonComplete
+```
+
+## Sampling Density
+
+First, we have to set things up by making a hexagon grid to aggregate the data. This was adapted and updated from <https://strimas.com/post/hexagonal-grids/>.
+
+```{r hex map, warning = FALSE}
+# Set to Equal Earth projection
+fishHorizonComplete <- project(fishHorizonComplete, 
+                               "epsg:3857")
+land <- project(land, crs(fishHorizonComplete))
+
+# Study area
+studyArea <- ext(fishHorizonComplete)
+HexPols2 <- st_make_grid(studyArea , cellsize = 300000, 
+                         square = FALSE, crs = crs(land))
+
+oceans <- vect(HexPols2)
+crs(oceans) <- crs(land)
+```
+
+Now, how many records are in each cell?
+
+```{r sampling density}
+# Gridding it
+point_density <- extract(x = oceans, y = fishHorizonComplete)
+point_density <- table(point_density[,2])
+counts <- NULL
+for ( i in 1:length(oceans)){
+  if (i %in% as.numeric(names(point_density))){
+    counts <- c(counts, point_density[names(point_density) == i])
+  } else{
+    counts <- c(counts, NA)
+  }
+}
+
+oceans$counts <- counts
+oceans <- crop(oceans, ext(land))
+
+my_breaks <- c(1, 10, 50, 100, 500, 1000, 5000, 6000)
+my_col <- rgb(0, 0, 255, max = 255, alpha = 0, names = "clear")
+
+#pdf("Figures/GlobalSamplingDensity.pdf")
+ggplot() + 
+  geom_spatvector(data = land, color = "gray50", alpha = .5) +
+  geom_spatvector(data = oceans, aes(fill = counts), color = NA) +
+  scale_fill_viridis_b(name = "Records", option = "A", na.value = my_col, 
+                       breaks = my_breaks, limits = c(0, max(my_breaks))) +
+  theme_minimal() + coord_sf(crs = st_crs(4326), # WGS84 for more understandable mapping
+                             xlim = c(-180, 180), expand = FALSE, 
+                             label_axes = list(bottom = "E", left = "N")) +
+  ggtitle("Worldwide Sampling Density of Marine Bony Fishes, iDigBio") +
+  scale_x_longitude(ticks = 40) + scale_y_latitude(ticks = 30)
+#dev.off()
+```
+
+## Depth Coverage
+This map highlights regions of the ocean with differing depth coverage of sampling effort - specifically the percentage of "available depth" in each hexagon covered by records in iDigBio.
+
+```{r depth sampling, warning=FALSE}
+# Get bathymetery
+bathymetry <- rast("data/ETOPO_2022_v1_60s_N90W180_bed.tif")
+bathymetry <- project(bathymetry, crs(oceans), method = "min")
+oceans$bathymetry <- extract(x = bathymetry, y = oceans, fun = min)[,2]
+oceans$bathymetry[oceans$bathymetry > 0] <- NA
+
+# Get sampling depth
+samplingDepth <- NULL
+for (i in 1:length(oceans)){
+  refs <- is.related(fishHorizonComplete, oceans[i], "within")
+  if(any(refs)){
+    maxDepth <- max(fishHorizonComplete[refs,"dwc_maximumDepthInMeters"], na.rm = TRUE)
+  } else {
+    maxDepth <- NA
+  }
+  samplingDepth <- c(samplingDepth, maxDepth)
+}
+
+oceans$maxSample <- -samplingDepth
+oceans$samplingRatio <- oceans$maxSample/oceans$bathymetry
+oceans$samplingRatio[oceans$samplingRatio > 1] <- 1
+
+# Put it all together
+#pdf("Figures/GlobalSamplingRatio.pdf")
+ggplot() + 
+  geom_spatvector(data = land, color = "gray50", alpha = .5) +
+  geom_spatvector(data = oceans, aes(fill = samplingRatio), color = NA) +
+  scale_fill_viridis_b(name = "Ratio", option = "A", na.value = my_col, breaks = seq(0,10, by =1)/10) +
+  theme_minimal() + coord_sf(crs = st_crs(4326), xlim = c(-180, 180), expand = FALSE, 
+                             label_axes = list(bottom = "E", left = "N")) +
+  ggtitle("Worldwide Depth Sampling Ratio of Marine Bony Fishes, iDigBio") +
+  scale_x_longitude(ticks = 40) + scale_y_latitude(ticks = 30)
+#dev.off()
+```
+
+# Summary statistics for Gulf of Mexico analysis
+
+Finally, here are some sampling stats.
+
+```{r a few summary stats, echo=FALSE}
+print(paste0("There are ", nrow(oceans), " cells in the global dataset."))
+print(paste0(nrow(oceans[oceans$counts > 9]), " cells in the global dataset have at least 10 records."))
+print(paste0(nrow(oceans[oceans$counts > 99]), " cells in the global dataset have at least 100 records."))
+
+print(paste0(nrow(oceans[oceans$bathymetry <= -200]), " cells in the global dataset have bathymetry at or exceeding 200m."))
+oceansFiltered <- oceans %>% filter(bathymetry <= -200) %>% 
+    filter(maxSample <= -200) 
+print(paste0(nrow(oceansFiltered), " have bathymetry at or exceeding 200m AND have at least one record from at or below 200m."))
+```
+
+
+# Appendix: Additional analyses 
+
+The following analyses were also initially performed, but given the extreme spatial bias in sampling, we determined they were not fit for inclusion in the final manuscript. We include them here should they prove useful to curious readers.
+
+## Data prep
+
+First, we do some additional filtering to fit the data for our use, including removing records with excessive (i.e. 100m) uncertainty in depth.
+
+```{r uncertainty filtering}
+# Remove records with excessive uncertainty
+print(paste0("Before removing records with a depth uncertainty of 100m or more, there are ", nrow(fishData), " records."))
+fishData$uncertainty <- fishData$dwc_maximumDepthInMeters - fishData$dwc_minimumDepthInMeters
+fishData <- fishData[fishData$uncertainty < 100,]
+print(paste0("After removing records with a depth uncertainty of 100m or more, there are ", nrow(fishData), " records."))
+fishData <- fishData[str_detect(fishData$dwc_scientificName, " sp\\.", negate = TRUE),]
+fishData <- fishData[str_detect(fishData$dwc_scientificName, "species", negate = TRUE),]
+print(paste0("After removing records that were not identified to species, there are ", nrow(fishData), " records."))
+```
+
+Next, we assign each record to equal-width depth bins under two strategies: 1) No empty bins permitted, 2) At least 10 records per bin.
+
+```{r determining bin number}
+# Zero empty bins
+breakNumber <- 60 # Starts with 60 breaks, which is probably way too many
+test <- TRUE
+while (test){
+    breakNumber <- breakNumber - 1
+    tmp <- hist(fishData$depth,  breaks = breakNumber, plot = F)
+    test <- 0 %in% tmp$counts # Checks if there are empty bins
+}
+zeroEmpty <- length(tmp$breaks)
+
+# Minimum five per bin
+breakNumber <- 60 # Starts with 60 breaks, which is probably way too many
+test <- TRUE
+while (test){
+    breakNumber <- breakNumber - 1
+    tmp <- hist(fishData$depth,  breaks = breakNumber, plot = F)
+    test <- 5 >= min(tmp$counts) # Checks to see if any bins are less than five
+}
+fivePerBin <- length(tmp$breaks)
+
+paste0("Number of bins if no bin can be empty: ", 
+       zeroEmpty)
+paste0("Number of bins if each bin must have at least five observations: ", 
+       fivePerBin)
+
+rm(tmp, breakNumber, test)
+```
+
+## Calculate diversity statistics
+
+Next, we define a function to calculate diversity statistics we need for downstream analysis.
+
+```{r define function to calculate bin stats, message=FALSE, warning=FALSE, fig.show='hide'}
+fishData <- data.frame(fishData)
+
+diversityStats <- function(x, binNumber){
+  # Get breaks based on equal width bins
+  breaks <- seq(min(x$depth), 
+              max(x$depth), 
+              (max(x$depth) - min(x$depth))/(binNumber))
+  
+  # Species richness per bin
+  depthDiversityCount <- NULL
+  effort <- NULL
+  for(i in 2:length(breaks)){
+    temp <- x %>% filter(depth >= breaks[i-1], breaks[i] >= depth)
+    depthDiversityCount <- c(depthDiversityCount,
+                             length(unique(temp$dwc_scientificName)))
+    effort <- c(effort, nrow(temp))
+  }
+  x$depthBin <- cut(x$depth, breaks=breaks, 
+                    labels = paste0(round(breaks[-(binNumber+1)], digits = 0), " to ", 
+                                    round(breaks[-1], digits = 0)))
+  
+  # Put together all the useful outputs
+  out <- list("breaks" = breaks, "depthDiversityCount" = depthDiversityCount, "effort" = effort, 
+              "data" = x, "binNumber" = binNumber)
+  return(out)
+}
+
+# Do the calculations
+zeroEmpty <- diversityStats(x = fishData, binNumber = zeroEmpty)
+fivePerBin <- diversityStats(x = fishData, binNumber = fivePerBin)
+```
+
+## Alpha diversity vs depth
+
+For each binning strategy, we initially plotted diversity at depth. We include lines at 200m and 1000m, which are commonly-used boundaries for epipelagic and mesopelagic zone boundaries, respectively.
+
+```{r depth vs diversity}
+# Plot diversity by depth
+plot(cbind(zeroEmpty$breaks[-(length(zeroEmpty$breaks))], zeroEmpty$depthDiversityCount), 
+     type = "l", xlab = "Depth (m)", ylab = "Species Richness",
+     main = paste0("Species Richness vs Depth\nNo Empty Bins (", zeroEmpty$binNumber, " Bins)"))
+abline(v = 200, col = "darkred", lty = "dashed")
+abline(v = 1000, col = "darkred", lty = "dashed")
+
+plot(cbind(fivePerBin$breaks[-(length(fivePerBin$breaks))], fivePerBin$depthDiversityCount), 
+     type = "l", xlab = "Depth (m)", ylab = "Species Richness",
+     main = paste0("Species Richness vs Depth\nat least five per Bin (", fivePerBin$binNumber, " Bins)"))
+abline(v = 200, col = "darkred", lty = "dashed")
+abline(v = 1000, col = "darkred", lty = "dashed")
+```
+
+## Null Model for Diversity
+
+How does the observed distribution of diversity compare to a null distribution? That is, what if any observation was equally likely to be found in each depth bin--do we see the same distribution of diversity?
+
+```{r null diversity test}
+calcEffortAndAlpha <-function(rawData){
+  effortAndAlpha <- data.frame(table(rawData$data$depthBin))
+  for(i in 1:nrow(effortAndAlpha)){
+    binCommunity <- rawData$data[rawData$data$depthBin == effortAndAlpha$Var1[i],]
+    binCommunity <- binCommunity[complete.cases(binCommunity$depthBin),]
+    effortAndAlpha$alpha[i] <- length(unique(binCommunity$dwc_scientificName))
+  }
+  colnames(effortAndAlpha) <- c("Depth", "Count", "Alpha")
+  return(effortAndAlpha)
+}
+
+effortAndAlpha <-calcEffortAndAlpha(zeroEmpty)
+
+# Simulate data
+fishDatSim <- zeroEmpty
+fishDatSim$data <- fishDatSim$data[!is.na(fishDatSim$data$depthBin),]
+fishDatSim <- lapply(1:100, FUN = function(x) {
+    fishDatSim$data$depthBin <- sample(fishDatSim$data$depthBin)
+    return(fishDatSim)
+  })
+# Calculate alpha
+allDat <- lapply(fishDatSim, FUN = function(x) calcEffortAndAlpha(x))
+# Plot sims and obs
+P1 <- ggplot()
+medProp <- c()
+for(dat in allDat){
+  P1 <- P1 +
+    geom_line(data = dat, aes(x = Depth, y = Alpha, group = 1), alpha=0.01)
+  medProp <- c(medProp, median(dat$prop))
+}
+
+finalPlot <- P1 +
+  geom_line(data = effortAndAlpha, aes(x = Depth, y = Alpha, group = 1), col = "red") +
+  theme_Publication() + 
+  labs( x = "Depth (m)", y = "Alpha Diversity") +
+  theme(axis.text.x = element_text(angle = 45, hjust=.5, vjust = .5)) +
+  ggtitle("Depth versus Diversity")
+
+finalPlot
+
+ggsave("Figures/DiversityObsVsSimWorld.png",finalPlot,height = 8.7, width = 11.4, units = "cm")
+```
+
+## Possible correlates with alpha diversity
+
+Of course, there are plenty of non-biological reasons diversity might decrease with depth. Two of our hypothesized correlations were decreased sampling effort and amount of available area as depth increases. We used the binning strategy based on having no empty bins because the five per bin strategy only yeilded three bins.
+
+```{r Sampling effort versus alpha taxonomy}
+effortAndAlpha$availableArea <- NA
+
+bathymetry <- rast("data/ETOPO_2022_v1_60s_N90W180_bed.tif") %>%
+  project(crs("epsg:4326"), method = "min")
+
+cellBath <- cellSize(bathymetry, unit = "km")
+for (i in 1:nrow(effortAndAlpha)){
+  depths <- as.numeric(unlist(strsplit(as.character(effortAndAlpha$Depth[i]), 
+                                       " to ")))
+  effortAndAlpha$availableArea[i] <- unlist(global(((bathymetry < -(depths[1])) * cellBath), sum, na.rm = T))
+}
+```
+
+It was suggested by Katherine Richardson, Owens's colleague at the University of Copenhagen, that the bump in the diversity decay curve could be the result of thermoclines and/or pycnoclines. We used temperature and salinity data from the World Ocean Atlas 2018 dataset to investigate this idea, extracting mean temperature and salinity for each depth bin and comparing it to diversity. We also examined apparent oxygen utilization and nitrogen concentration as potential correlates, as these variables are also available via the WOA 2018 dataset and may be correlated with diversity.
+
+```{r environmental variable extraction}
+# Define extraction function
+envDatExtract <- function(envRaster, mShp, breaks){
+  # Get all the points
+  dummyOccs <- data.frame(0, 0, 0)
+  colnames(dummyOccs) <- c("longitude", "latitude", "depth")
+  grid <- mSampling3D(occs = dummyOccs, 
+                      envBrick = envRaster, 
+                      mShp = mShp, verbose = F)
+  allData <- cbind(grid, 
+                 xyzSample(grid, envBrick = envRaster, verbose = F))
+  colnames(allData) <- c("longitude", "latitude", "depth", "Variable")
+  
+  # Assign points to bins and calculuate summary stats
+  binSampledData <- NULL
+  for(i in 2:length(breaks)){
+    temp <- allData %>% filter(depth >= breaks[i-1], breaks[i] >= depth)
+    binSampledData <- c(binSampledData, mean(temp[,4]))
+  }
+  return(binSampledData)
+}
+
+effortAndAlpha <- effortAndAlpha %>% 
+  rename("Available Area" = availableArea)
+
+world <- vect(ext(c(-180,180,-90,90)))
+crs(world) <- crs("epsg:4326")
+
+effortAndAlpha$Temperature <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
+  project(crs(world)) %>% 
+  crop(world, mask = TRUE) %>% 
+  envDatExtract(mShp = world, breaks = tenPerBin$breaks)
+effortAndAlpha$Salinity <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
+  project(crs(world)) %>% 
+  crop(world, mask = TRUE) %>% 
+  envDatExtract(mShp = world, breaks = tenPerBin$breaks)
+effortAndAlpha$AOU <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
+  project(crs(world)) %>% 
+  crop(world, mask = TRUE) %>% 
+effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
+  project(crs(world)) %>% 
+  crop(world, mask = TRUE) %>% 
+  envDatExtract(mShp = world, breaks = tenPerBin$breaks)
+```
+
+Finally, we plotted the result. 
+
+```{r}
+effortAndAlphaLong <- reshape2::melt(effortAndAlpha[,c("Depth", "Alpha", 
+                                                        "Count", "Available Area",
+                                                        "Temperature", "Salinity", 
+                                                        "AOU", "Nitrate")], 
+                                      id.vars = "Depth")
+
+P1 <- ggplot(effortAndAlphaLong, aes(Depth, value, 
+                                      colour = variable, group = 1)) +
+  geom_line() +
+  theme_Publication() + 
+  labs( x = "Depth (m)") +
+  theme(axis.text.x = element_text(angle = 45, hjust=.5, vjust = .5)) +
+  scale_color_brewer(palette = "Dark2") +
+  facet_wrap(variable~., ncol = 1, scales = "free_y") + 
+  theme(legend.position="none", axis.title.y = element_blank())
+P1
+ggsave("Figures/WorldClines.png",P1,height = 12, width = 11.4, units = "cm")
+```
