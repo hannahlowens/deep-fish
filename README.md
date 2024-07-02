@@ -8,8 +8,8 @@ This page shows how the raw data downloaded from iDigBio (link) were processed p
 
 ## Global Analysis
 We started with a global analysis of the dataset to identify areas that were well-sampled for further examination.
-* [Page here]()
-* [Code here]()
+* [Page here](https://hannahlowens.github.io/deep-fish/Global_Biodiversity)
+* [Code here](https://github.com/hannahlowens/deep-fish/blob/main/Global_Biodiversity.Rmd)
 
 ## Gulf of Mexico Analysis
 The Gulf of Mexico was particularly densely sampled in the iDigBio dataset. We focused on this area to investigate finer-scale depth-structured patterns of fish diversity. 
