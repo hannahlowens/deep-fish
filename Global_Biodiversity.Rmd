@@ -413,24 +413,24 @@ crs(world) <- crs("epsg:4326")
 effortAndAlpha$Temperature <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
+  envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
 effortAndAlpha$Salinity <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
+  envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
 effortAndAlpha$AOU <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
+  envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
 effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
-  envDatExtract(mShp = world, breaks = fivePerBin$breaks)
+  envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
 ```
 
 Finally, we plotted the result. 
 
-```{r}
+```{r, , fig.height = 10}
 effortAndAlphaLong <- reshape2::melt(effortAndAlpha[,c("Depth", "Alpha", 
                                                         "Count", "Available Area",
                                                         "Temperature", "Salinity", 
