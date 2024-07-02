@@ -358,7 +358,7 @@ zeroEmpty <- diversityStats(x = fishData, binNumber = zeroEmpty)
 tenPerBin <- diversityStats(x = fishData, binNumber = tenPerBin)
 ```
 
-## Alpha diversity vs depth
+## Species richness vs depth
 
 For each binning strategy, we initially plotted diversity at depth. We include lines at 200m and 1000m, which are commonly-used boundaries for epipelagic and mesopelagic zone boundaries, respectively.
 
@@ -394,7 +394,7 @@ calcEffortAndAlpha <-function(rawData){
     binCommunity <- binCommunity[complete.cases(binCommunity$depthBin),]
     effortAndAlpha$alpha[i] <- length(unique(binCommunity$dwc_scientificName))
   }
-  colnames(effortAndAlpha) <- c("Depth", "Count", "Alpha")
+  colnames(effortAndAlpha) <- c("Depth", "Count", "Species_Richness")
   return(effortAndAlpha)
 }
 
@@ -405,7 +405,7 @@ fishDatSim <- lapply(1:100, FUN = function(x) {
     fishDatSim$data$depthBin <- sample(fishDatSim$data$depthBin)
     return(fishDatSim)
   })
-# Calculate alpha
+# Calculate species richness
 allDat <- lapply(fishDatSim, 
                  FUN = function(x) calcEffortAndAlpha(x))
 
@@ -416,17 +416,17 @@ P1 <- ggplot()
 medProp <- c()
 for(dat in allDat){
   P1 <- P1 +
-    geom_line(data = dat, aes(x = Depth, y = Alpha, group = 1), 
+    geom_line(data = dat, aes(x = Depth, y = Species_Richness, group = 1), 
               alpha=0.01)
   medProp <- c(medProp, median(dat$prop))
 }
 
 finalPlot <- P1 +
   geom_line(data = effortAndAlpha, 
-            aes(x = Depth, y = Alpha, group = 1), 
+            aes(x = Depth, y = Species_Richness, group = 1), 
             col = "red") +
   theme_Publication() + 
-  labs( x = "Depth (m)", y = "Alpha Diversity") +
+  labs( x = "Depth (m)", y = "Species Richness") +
   theme(axis.text.x = element_text(angle = 45, hjust=.5, 
                                    vjust = .5)) +
   ggtitle("Depth versus Diversity")
@@ -435,13 +435,13 @@ finalPlot
 
 ggsave("Figures/DiversityObsVsSimGOM.png",finalPlot,height = 8.7, width = 11.4, units = "cm")
 ```
-## Possible correlates with alpha diversity
+## Possible correlates with species richness
 
 ### Number of records and area covered
 
 Of course, there are plenty of non-biological reasons diversity might decrease with depth. Two of our hypothesized correlations were decreased sampling effort and amount of available area as depth increases.
 
-```{r Sampling effort versus alpha taxonomy}
+```{r Sampling effort versus species richness}
 effortAndAlpha$availableArea <- NA
 gomBath <- mask(x = bathymetry, mask= gomShapefile)
 cellBath <- cellSize(gomBath, unit = "km")
@@ -509,7 +509,7 @@ effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/Proces
 Finally, we plot alpha diversity and its hypothesized correlates to identify emergent trends.
 
 ```{r, fig.height = 10}
-effortAndAlphaLong <- reshape2::melt(effortAndAlpha[,c("Depth", "Alpha", 
+effortAndAlphaLong <- reshape2::melt(effortAndAlpha[,c("Depth", "Species_Richness", 
                                                         "Count", "Available Area",
                                                         "Temperature", "Salinity", 
                                                         "AOU", "Nitrate")], 
