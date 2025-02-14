@@ -669,3 +669,45 @@ Finally, are there any species that clearly and signifcantly associate with one 
 ```{r multipatt() results}
 tenPerBin$spClusters[tenPerBin$spClusters$p.value < 0.01,]
 ```
+
+## Depth ranges
+
+Finally, let's look at depth ranges for species that have enough data (n > 9). In particular, we are interested in testing the hypothesis that species' depth ranges are correlated with minimum depth (that is, the deeper species are, the broader their known depth range). We calculate maximum and minimum depth as the 95th and 5th percentile of maximum and minimum possible depth of each species from individual records, in order to account for noise in the data.
+
+First, how do these data look?
+
+```{r plot depth ranges, warning=FALSE}
+depthRanges <- fishData %>% 
+  group_by(dwc_scientificName) %>% 
+  summarise(count = n(),
+            depthMin=quantile(dwc_minimumDepthInMeters, probs = .05),
+            depthMax=quantile(dwc_maximumDepthInMeters, probs = .95),
+            family = dwc_family[1])
+depthRanges <- depthRanges %>% 
+  filter(count > 9) %>% 
+  mutate(depthRange = depthMax - depthMin) %>% 
+  arrange(depthMin, depthMax, family)
+
+ggplot()+
+   geom_linerange(data=depthRanges,
+                  aes(x=depthMin, 
+                      ymin=depthMin, 
+                      ymax=depthMax), 
+                  linewidth=.5, alpha=0.5) +
+  xlab("Minimum Depth (m)") +
+  ylab("Depth (m)") +
+  labs(title = "Species' Depth Ranges Ordered by Minimum Depth") +
+  theme(plot.caption = element_text(hjust=1)) +
+  theme_bw()
+```
+
+And here is a statistical test.
+
+```{r depth range corr}
+# linear model controlling for sampling
+model <- lm(data = depthRanges, depthRange ~ depthMin + count)
+
+summary(model)
+```
+
+As you can see, the model does not describe the variance very well, and most of the variance in depth range is explained by the number of measurements available for each species. So this is a very inconclusive test--much more and cleaner data is needed to more conclusively test this question.
