@@ -205,6 +205,14 @@ print(paste0(nrow(oceans[oceans$bathymetry <= -200]), " cells in the global data
 oceansFiltered <- oceans %>% filter(bathymetry <= -200) %>% 
     filter(maxSample <= -200) 
 print(paste0(nrow(oceansFiltered), " have bathymetry at or exceeding 200m AND have at least one record from at or below 200m."))
+
+oceansFiltered <- oceans %>% 
+  filter(!is.na(samplingRatio), samplingRatio >= .95)
+print(paste0("There are ", nrow(oceansFiltered), " cells in the dataset that are sampled to at least 95% depth."))
+
+oceansFiltered <- oceans %>% 
+  filter(!is.na(samplingRatio), samplingRatio >= 1.0)
+print(paste0("There are ", nrow(oceansFiltered), " cells in the dataset that are sampled to full depth."))
 ```
 
 
