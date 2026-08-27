@@ -2,7 +2,7 @@
 Scripts for "Global, depth-resolved marine fish occurrences from digitized natural history collections".
 
 ## Raw Data Cleaning
-This page shows how the raw data downloaded from iDigBio (link) were processed prior to analysis.
+This page shows how the raw data downloaded from iDigBio were processed prior to analysis.
 * [Page here](https://hannahlowens.github.io/deep-fish/RawDataCleaning)
 * [Code here](https://github.com/hannahlowens/deep-fish/blob/main/RawDataCleaning.Rmd)
 
