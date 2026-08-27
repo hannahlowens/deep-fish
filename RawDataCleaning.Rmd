@@ -22,15 +22,24 @@ First, I read in the data and do some preliminary name cleaning and assessment.
 library(stringr)
 library(dplyr)
 library(terra)
+library(data.table)
+library(worrms)
+library(ggplot2)
 
 # Using raw search results; iDigBio processed data does not include latitude or longitude
 fishData <- read.csv("data/866ac026-5731-4ca2-bb51-7b154d7cde25/occurrence_raw.csv")
 
 # There are 187 columns in the raw dataset. I select the relevant ones for our purposes.
-fishData <- fishData[, c("dwc.family", "dwc.genus", "dwc.scientificName",
+fishData <- fishData[, c("coreid",
+                         "dwc.family", "dwc.genus", "dwc.scientificName",
                          "dwc.verbatimDepth", "dwc.maximumDepthInMeters", 
                          "dwc.minimumDepthInMeters", "dwc.decimalLongitude", 
-                         "dwc.decimalLatitude","dwc.year","dwc.month","dwc.day")]
+                         "dwc.decimalLatitude","dwc.year","dwc.month","dwc.day",
+                         "dwc.basisOfRecord", "dwc.samplingProtocol",
+                         "dwc.coordinateUncertaintyInMeters", "dwc.coordinatePrecision",
+                         "dwc.institutionCode", "dwc.collectionID", "dwc.collectionCode",
+                         "dwc.datasetName", "dwc.catalogNumber", 
+                         "dcterms.license", "dc.rights", "dcterms.bibliographicCitation")]
 
 # Fix blanks
 fishData[fishData == ""] <- NA
@@ -63,6 +72,61 @@ fishData$dwc.family[fishData$dwc.family == "MACROURIDAEX"] <- "MACROURIDAE"
 fishData$dwc.family[fishData$dwc.family == "MONOCENTRIDIDAE"] <- "MONOCENTRIDAE"
 fishData$dwc.family[fishData$dwc.family == "OPHICHTHYIDAE"] <- "OPHICHTHIDAE"
 fishData$dwc.family <- str_to_title(fishData$dwc.family)
+
+fishData$dwc.basisOfRecord[fishData$dwc.basisOfRecord == "PRESERVED_SPECIMEN"] <- "PreservedSpecimen"
+
+# Collating licenses
+fishData$dcterms.license[is.na(fishData$dcterms.license)] <-
+  fishData$dc.rights[is.na(fishData$dcterms.license)]
+fishData$license <- fishData$dcterms.license
+fishData <- fishData |> 
+  select(-c("dcterms.license", "dc.rights"))
+
+# Tidying bibliographic citations (Many for individual specimens, not truly bibliographic)
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "", pattern = "\\S+-\\S+\\.\\s")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "", pattern = "\\S+-\\S+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "COLLECTION:UW", 
+                                               pattern = "COLLECTION\\s:UW")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "COLLECTION:UW.", 
+                                               pattern = "COLLECTION:UW\\s\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "TCWC:Ichthyology.", 
+                                               pattern = "TCWC:Ichthyology:\\d+\\.\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "SUI:VERT.", 
+                                               pattern = "SUI:VERT:\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "UNSM:Fishes.",
+                                               pattern = "UNSM:Fishes:\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "LSUMZ:Fishes.",
+                                               pattern = "LSUMZ:Fishes:\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "SLU:Ichthyology.",
+                                               pattern = "SLU:Ichthyology:\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "TCWC:Ichthyology.",
+                                               pattern = "TCWC:Ichthyology:\\d+\\.")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "CMNFI",
+                                               pattern = ".+CMNFI.+")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "UAMZ",
+                                               pattern = ".+UAMZ.+")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "YPM ICH",
+                                               pattern = ".+YPM\\sICH.+")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "YPM IZ",
+                                               pattern = ".+YPM\\sIZ.+")
+fishData$dcterms.bibliographicCitation <- gsub(fishData$dcterms.bibliographicCitation, 
+                                               replacement = "YPM ENT",
+                                               pattern = ".+YPM\\sENT.+")
+fishData[fishData == ""] <- NA # Necessary to fix blanks left in bibliographic filtration
 
 # Fills in missing genus if scientific name is present
 for (i in seq(1, nrow(fishData))){
@@ -113,93 +177,131 @@ paste0("Number of entries with incomplete max/min depth data (pre-cleaning): ",
 ```
 Some of the missing name data may be fixable, but that is best done by hand later. For example, in some cases a family is missing, but the scientific name is there, so it can be looked up.
 
-Next, I read in the data and clean the maximum and minimum depth columns, getting rid of units and converting depths  in feet or fathoms to meters. It is assumed that measurements without units are in meters.
+Next, I read in the data and clean the maximum and minimum depth columns, getting rid of units and converting depths  in feet or fathoms to meters. It is assumed that measurements without units are in meters. For species without maximum and/or minimum depths, we try to extract additional information from the verbatim depth data. Assumptions again include assuming depths with no unit are in meters, and that if both maximum and minimum depths already existed, they are more accurate than the verbatim depth.
 
-```{r process max and min depth values, message=FALSE, warning=FALSE}
-# Function to convert units
-convertUnits <- function(input, minMax = "both") {
-  # Error checking
-  if (is.na(input)) return(NA)
-  if (!str_detect(input, regex("\\d"))) return(NA)
-  if (str_detect(input, "Inf")) return(NA)
-  if (str_length(gsub("\\D", "", input)) < 1) return(NA)
+```{r process depth values, message=FALSE, warning=FALSE}
+# Convert to data.table for lightning-fast memory operations
+setDT(fishData)
+
+# Helper function: Fully vectorized string parser
+parse_depth_vec <- function(x) {
+  # Clean strings
+  clean <- tolower(trimws(as.character(x)))
+  clean <- gsub(" ", "", clean, fixed = TRUE)
+  clean <- gsub("to", "-", clean, fixed = TRUE)
+  clean <- gsub("ca.", "", clean, fixed = TRUE)
   
-  # Process input
-  input <- tolower(input)
-  input <- gsub(x = input, " ", "")
-  input <- gsub(x = input, "to", "-")
-  input <- gsub(x = input, "ca.", "")
-  units <- str_extract(input, "[cfkm]\\w*+")
-  input <- gsub(input, pattern = "\\s*\\D+$", replacement = "")
-  if(str_detect(string = input, pattern = "-", )){
-    input <- unlist(strsplit(input, "-"))
-    input <- input[!input == ""]
-    input <- suppressWarnings(as.numeric(input))
-    if(all(is.na(input))) return(NA)
-    input <- input[!is.na(input)]
-    if(minMax == "min") input <- min(input)
-    if(minMax == "max") input <- max(input)
-  }
+  # Extract raw numbers (supports ranges like "10-20" or floats like "12.5")
+  # Matches up to 2 numeric components around a dash
+  num1 <- suppressWarnings(as.numeric(str_extract(clean, "^\\d+\\.*\\d*")))
   
-  if(is.na(units)) return(suppressWarnings(as.numeric(input)))
+  # Check if range exists
+  has_dash <- str_detect(clean, "-")
+  num2 <- ifelse(has_dash, suppressWarnings(as.numeric(str_match(clean, "-\\s*(\\d+\\.*\\d*)")[,2])), NA_real_)
   
-  # Conversion
-  if (any(str_detect(string = units, pattern = c("feet", "ft", "'")))){
-    return(suppressWarnings(as.numeric(gsub("\\D", "", input)) * 0.3048))
-  }
-  if (any(str_detect(string = units, pattern = c("fm", "fms", "fathoms", "f")))){
-    return(suppressWarnings(as.numeric(gsub("\\D", "", input)) * 1.8288))
-  }
-  if (any(str_detect(string = units, pattern = c("cm")))){
-    return(suppressWarnings(as.numeric(gsub("\\D", "", input))/100))
-  }
-  if (any(str_detect(string = units, pattern = c("m", "meters")))){
-    return(suppressWarnings(as.numeric(gsub("\\D", "", input))))
-  }
+  # Determine base min and max
+  d_min <- pmin(num1, num2, na.rm = TRUE)
+  d_max <- pmax(num1, num2, na.rm = TRUE)
+  
+  # Extract units
+  units <- str_extract(clean, "(fathoms|fms|fath|fathom|^f$|feet|ft|fm|cm|meters|meter|m|')")
+  
+  # Compute conversion multiplier (Default = 1 for meters / unit-free)
+  multiplier <- case_when(
+    str_detect(units, "(feet|ft|')") ~ 0.3048,
+    str_detect(units, "(fathoms|fms|fm|^f$)") ~ 1.8288,
+    str_detect(units, "^cm$") ~ 0.01,
+    TRUE ~ 1.0
+  )
+  
+  list(
+    min = d_min * multiplier,
+    max = d_max * multiplier
+  )
 }
 
-# Loop through the rows
-for (i in 1:nrow(fishData)) {
-  max <- convertUnits(fishData$dwc.maximumDepthInMeters[i], minMax = "max")
-  min <- convertUnits(fishData$dwc.minimumDepthInMeters[i], minMax = "min")
-  range <- c(min, max)
+# Fast Processing via Unique Value Lookup Table
+process_depth_column <- function(column_vec) {
+  # Get only non-NA unique values
+  uniques <- unique(column_vec[!is.na(column_vec) & column_vec != "" & column_vec != "Inf"])
   
-  # Check for max/min inversion and assign to rightful place in the table
-  if (!all(is.na(range))){
-    fishData$dwc.maximumDepthInMeters[i] <- max(c(max, min), na.rm = TRUE)
-    fishData$dwc.minimumDepthInMeters[i] <- min(c(max, min), na.rm = TRUE)
+  if (length(uniques) == 0) {
+    return(data.table(raw = character(0), min = numeric(0), max = numeric(0)))
   }
+  
+  # Parse ONLY unique entries once
+  parsed <- parse_depth_vec(uniques)
+  
+  data.table(
+    raw = uniques,
+    min = parsed$min,
+    max = parsed$max
+  )
 }
 
-paste0("Number of entries with incomplete max/min depth data (post-cleaning): ", 
-       sum(!complete.cases(fishData[,c("dwc.maximumDepthInMeters", 
-                                       "dwc.minimumDepthInMeters")])))
-```
+# Generate lookup dictionary for unique string representations across all depth columns
+all_unique_strings <- unique(c(
+  as.character(fishData$dwc.maximumDepthInMeters),
+  as.character(fishData$dwc.minimumDepthInMeters),
+  as.character(fishData$dwc.verbatimDepth)
+))
 
-Next, for species without maximum and/or minimum depths, we try to extract additional information from the verbatim depth data. Assumptions again include assuming depths with no unit are in meters, and that if both maximum and minimum depths already existed, they are more accurate than the verbatim depth.
+lookup_table <- process_depth_column(all_unique_strings)
+setkey(lookup_table, raw)
 
-``` {r process verbatim depths}
-fishData[fishData == "Inf"] <- NA
-fishData[fishData == "-Inf"] <- NA
-
-# Mining verbatim depth for precious missing information
-for (i in 1:nrow(fishData)){
-  max <- fishData$dwc.maximumDepthInMeters[i]
-  min <- fishData$dwc.minimumDepthInMeters[i]
-  if(any(is.na(c(min,max)))){
-    input <- fishData$dwc.verbatimDepth[i]
-    output <- convertUnits(input, minMax = "both")
-    range <- c(min, max, output)
-    if(!all(is.na(range))){
-      fishData$dwc.maximumDepthInMeters[i] <- max(range, na.rm=TRUE)
-      fishData$dwc.minimumDepthInMeters[i] <- min(range, na.rm=TRUE)
-    }
-  }
+# Fast Join & Direct Assignment
+# Clean up "Inf" values across target columns
+cols_to_clean <- c("dwc.maximumDepthInMeters", "dwc.minimumDepthInMeters", "dwc.verbatimDepth")
+for (col in cols_to_clean) {
+  set(fishData, i = which(fishData[[col]] %in% c("Inf", "-Inf")), j = col, value = NA)
 }
 
-paste0("Number of entries with incomplete max/min depth data (post-mining): ", 
-       sum(!complete.cases(fishData[,c("dwc.maximumDepthInMeters", 
-                                       "dwc.minimumDepthInMeters")])))
+# Join lookup values directly
+fishData[, max_clean := lookup_table[.(as.character(dwc.maximumDepthInMeters)), max]]
+fishData[, min_clean := lookup_table[.(as.character(dwc.minimumDepthInMeters)), min]]
+
+# Handle range inversions on min/max
+fishData[, `:=`(
+  dwc.maximumDepthInMeters = pmax(max_clean, min_clean, na.rm = TRUE),
+  dwc.minimumDepthInMeters = pmin(max_clean, min_clean, na.rm = TRUE)
+)]
+
+# Drop temporary join columns
+fishData[, c("max_clean", "min_clean") := NULL]
+
+# Print intermediate check
+cat("Number of entries with incomplete max/min depth data post-cleaning: ", 
+    sum(!complete.cases(fishData[, .(dwc.maximumDepthInMeters, dwc.minimumDepthInMeters)])), "\n")
+
+# Process Verbatim Depth Fill-ins
+fishData[, verb_min := lookup_table[.(as.character(dwc.verbatimDepth)), min]]
+fishData[, verb_max := lookup_table[.(as.character(dwc.verbatimDepth)), max]]
+
+# Fill missing min/max values using verbatim depth extractions
+fishData[, `:=`(
+  # If min is NA, check verbatim min/avg
+  dwc.minimumDepthInMeters = coalesce(dwc.minimumDepthInMeters, verb_min),
+  # If max is NA, check verbatim max/avg
+  dwc.maximumDepthInMeters = coalesce(dwc.maximumDepthInMeters, verb_max)
+)]
+
+# Ensure bounds consistency across filled values
+fishData[, `:=`(
+  final_max = pmax(dwc.maximumDepthInMeters, dwc.minimumDepthInMeters, na.rm = TRUE),
+  final_min = pmin(dwc.maximumDepthInMeters, dwc.minimumDepthInMeters, na.rm = TRUE)
+)]
+
+fishData[, dwc.maximumDepthInMeters := final_max]
+fishData[, dwc.minimumDepthInMeters := final_min]
+
+# Clean up helper columns
+fishData[, c("verb_min", "verb_max", "final_max", "final_min") := NULL]
+
+# Final calculation
+fishData[, depthUncertainty := (dwc.maximumDepthInMeters - dwc.minimumDepthInMeters) / 2]
+
+cat("Number of entries with incomplete max/min depth data (post-mining): ", 
+    sum(!complete.cases(fishData[, .(dwc.maximumDepthInMeters, dwc.minimumDepthInMeters)])), "\n")
 ```
 Ok, great, we now have more complete depth range records than we started with.
 
@@ -238,8 +340,8 @@ paste0("Number of entries with maximum depths that do not exceed actual depth at
 Finally, I calculate a column with a single depth measurement--the median between minimum and maximum depth. In cases where only the minimum or maximum are given, this number is used. I then save the .csv file so it is not necessary to repeat the analysis.
 
 ```{r calculate median depth column, dev='png'}
-fishData$depth <- (as.numeric(fishData$dwc.maximumDepthInMeters) + 
-                     as.numeric(fishData$dwc.minimumDepthInMeters))/2
+fishData$depth <- (fishData$dwc.maximumDepthInMeters + 
+                     fishData$dwc.minimumDepthInMeters)/2
 for(i in 1:nrow(fishData)){
   if(is.na(fishData$depth[i])){
     if(!is.na(fishData$dwc.minimumDepthInMeters[i])){
@@ -268,7 +370,7 @@ write.csv(missingFamilies, "data/missingFamilies.csv", row.names = F)
 
 fishData <- do.call(data.frame,fishData)
 write.csv(fishData, 
-          "data/processedFishDataWithDates.csv", 
+          "data/fishOccurrencesForTaxRect.csv", 
           row.names = F)
 
 paste0("There are ", nrow(fishData), " entries in the dataset.")
@@ -276,11 +378,11 @@ paste0("There are ", nrow(fishData), " entries in the dataset.")
 
 # Manual Taxonomic Review
 
-As mentioned at the beginning of this analysis, several records had no family provided. These records were reviewed by R. Singer, who also flagged several instances of illegitimate species names. In this final step, I mapped his feedback back into the dataset.
+As mentioned at the beginning of this workflow, several records had no family provided. These records were reviewed by R. Singer, who also flagged several instances of illegitimate species names. In this final step, I mapped his feedback back into the dataset.
 
 ```{r map Singer feedback, dev='png'}
-fishData <- read.csv("data/processedFishDataWithDates.csv")
-singerFeedback <- read.csv("missingFamilies_RandyReview.csv")
+fishData <- read.csv("data/fishOccurrencesForTaxRect.csv")
+singerFeedback <- read.csv("missingFamilies_SingerReview.csv")
 
 for (i in 1:nrow(singerFeedback)){
   update <- singerFeedback[i,]
@@ -290,16 +392,147 @@ for (i in 1:nrow(singerFeedback)){
 fishData <- fishData[complete.cases(fishData$dwc_family),]
 fishData <- do.call(data.frame,fishData)
 write.csv(fishData, 
-          "data/processedFishDataWithDatesAndNames.csv", 
+          "data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv", 
+          row.names = F)
+```
+
+# Taxonomic rectification with WoRMS
+
+To ensure the dataset is compatable with other datasets derived from sources that instead use WoRMS taxonomy, we mapped AphiaIDs to our records. The `TAXAMATCH` fuzzy matching algorithm employed also enabled broader-scale spelling corrections. Note that in some cases, there is no AphiaID for a record not because the name is invalid, but because it is not a species under the purview of WoRMS. In other cases, there may be multiple name matches in WoRMS, but there is no accepted valid name (these are marked "Unaccepted" if there is only one name match with no accepted name, or "Equivocal" there are multiple matches with no accepted name). For these reasons, we retain both the corrected "dwc_scientificName" column (which is not spell-checked) and the "valid_name_WoRMS" column, which provides the valid name per WoRMS taxonomy, if possible.
+
+```{r taxon match with WoRMS}
+fishData <- read.csv("data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv")
+taxRect <- function(taxonomicList, wormsMatches){
+  txMatchTb <- data.frame(ogName = NULL, vAID = NULL, vname = NULL, vfamily = NULL)
+  matches <- wm_records_taxamatch(name = taxonomicList, marine_only = FALSE)
+  for(i in 1:length(matches)){
+    tRect <- NULL
+    ogName <- taxonomicList[[i]]
+    if(nrow(matches[[i]]) == 0){
+      vAID <- NA
+      vname <- NA
+      vfamily <- NA
+    } else{
+      matches[[i]] <- matches[[i]][matches[[i]]$phylum == "Chordata",] # yes, this is necessary
+      if(nrow(matches[[i]]) > 1  && !any(matches[[i]]$status == "accepted")) {
+        vAID <- NA
+        vname <- "Equivocal"
+        vfamily <- ifelse(length(unique(matches[[i]]$family)) == 1,
+                          yes = unique(matches[[i]]$family), no = "Equivocal")
+      } else if(nrow(matches[[i]]) > 1) {
+        vAID <- matches[[i]]$valid_AphiaID[matches[[i]]$status == "accepted"]
+        vname <- matches[[i]]$valid_name[matches[[i]]$status == "accepted"]
+        vfamily <- ifelse(length(unique(matches[[i]]$family[matches[[i]]$status == "accepted"])) == 1,
+                          yes = unique(matches[[i]]$family[matches[[i]]$status == "accepted"]), 
+                          no = "Equivocal")
+      } else if(nrow(matches[[i]]) > 0 && matches[[i]]$status == "unaccepted"){
+        vAID <- NA
+        vname <- "Unaccepted"
+        vfamily <- NA
+      } else if (nrow(matches[[i]]) > 0){
+        vAID <- matches[[i]]$valid_AphiaID
+        vname <- matches[[i]]$valid_name
+        vfamily <- matches[[i]]$family
+      } else{
+        vAID <- NA
+        vname <- NA
+        vfamily <- NA
+      }
+    }
+    tRect <- c(ogName, vAID, vname, vfamily)
+    txMatchTb <- rbind(txMatchTb, tRect)
+  }
+  colnames(txMatchTb) <- c("originalName", "valid_AphiaID", 
+                           "valid_name_WoRMS", "valid_family_WoRMs")
+  return(txMatchTb)
+}
+
+taxList <- unique(fishData$dwc_scientificName)
+taxListChunked <- split(taxList, ceiling(seq_along(taxList) / 10))
+txMatchTb <- data.frame()
+for (j in 1:length(taxListChunked)){ # wm_records_taxamatch() works best in small chunks
+  txMatchTb <- rbind(txMatchTb, taxRect(taxonomicList = taxListChunked[[j]]))
+}
+fishData <- merge(fishData, txMatchTb, by.x = "dwc_scientificName", by.y = "originalName")
+write.csv(fishData, 
+          "data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv", 
+          row.names = F)
+```
+
+# Column relabeling
+
+To make the dataset a little more intuitive for future users, we relabel the columns to be clearer. Prefix "iDigBio" indicates field came directly from iDigBio and was not altered by our curation pipeline; column names prefixed with iDigBIO match raw column names. Prefix "SOcurated" indicates field was cleaned and curated in our curation pipeline. Prefix "WoRMS" indicates field was derived from fuzzy taxonomic matching of the "SOcurated_scientificName" field with WoRMS taxonomy using `worrms::worrms::wm_records_taxamatch()`.
+
+```{r column rename}
+fishData <- read.csv("data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv")
+
+fishData <- fishData |> 
+  rename(iDigBio_coreid = coreid,
+        SOcurated_scientificName = dwc_scientificName,
+        SOcurated_family = dwc_family,
+        SOcurated_genus = dwc_genus,
+        iDigBio_dwc_verbatimDepth = dwc_verbatimDepth,
+        SOcurated_maximumDepthInMeters = dwc_maximumDepthInMeters,
+        SOcurated_minimumDepthInMeters = dwc_minimumDepthInMeters,
+        iDigBio_dwc_decimalLongitude = dwc_decimalLongitude,
+        iDigBio_dwc_decimalLatitude = dwc_decimalLatitude,
+        iDigBio_dwc_year = dwc_year,
+        iDigBio_dwc_month = dwc_month,
+        iDigBio_dwc_day = dwc_day,
+        iDigBio_dwc_basisOfRecord = dwc_basisOfRecord,
+        iDigBio_dwc_samplingProtocol = dwc_samplingProtocol,
+        iDigBio_dwc_coordinateUncertaintyInMeters = dwc_coordinateUncertaintyInMeters,
+        iDigBio_dwc_coordinatePrecision = dwc_coordinatePrecision,
+        iDigBio_dwc_institutionCode = dwc_institutionCode,
+        iDigBio_dwc_collectionID = dwc_collectionID,
+        iDigBio_dwc_collectionCode = dwc_collectionCode,
+        iDigBio_dwc_datasetName = dwc_datasetName,
+        iDigBio_dwc_catalogNumber = dwc_catalogNumber,
+        SOcurated_bibliographicCitation = dcterms_bibliographicCitation,
+        SOcurated_license = license,
+        SOcurated_depthUncertainty = depthUncertainty,
+        SOcurated_bathymetry = mapDepth,
+        SOcurated_depth = depth,
+        WoRMS_AphiaID = valid_AphiaID,
+        WoRMS_scientificName = valid_name_WoRMS,
+        WoRMS_family = valid_family_WoRMs)
+
+write.csv(fishData, 
+          "data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv", 
           row.names = F)
 ```
 
 # Final results
 
-Here is what was left at the end of processing, ready for analysis.
+Here is what was left at the end of processing, ready for analysis and citation.
 
-```{r}
+```{r final report}
 paste0("There are ", nrow(fishData), " entries in the dataset.")
-paste0("There are ", length(unique(fishData$dwc_scientificName)), 
-       " species in the dataset.")
+paste0("There are ", length(unique(fishData$SOcurated_scientificName)), 
+       " unique species names in the dataset.")
+paste0("Of these, ", length(unique(fishData$WoRMS_AphiaID)), 
+       " are species recognized in WoRMS.")
+
+# Data sources
+data <- table(fishData$iDigBio_dwc_institutionCode)
+data <- data[!names(data) == "NO DISPONIBLE"]
+data <- data.frame(sort(data))
+
+# Breakdown of institutions in dataset
+ggplot(data, aes(x=Var1, y=Freq)) +
+  geom_segment(aes(x=Var1, xend=Var1,
+                   y=0, yend=Freq),
+                color="skyblue") +
+  geom_point(color="blue", size=3, alpha=0.6) +
+  theme_light() +
+  coord_flip() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank()) +
+  xlab("Institution Code") +
+  ylab("Record Count")
+
+# Bibliography of citations provided
+print(sort(unique(fishData$SOcurated_bibliographicCitation)))
 ```
