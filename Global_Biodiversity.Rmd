@@ -68,7 +68,7 @@ theme_Publication <- function(base_size=10,
 Read in data.
 
 ```{r read in data}
-fishData <- read.csv("data/processedFishDataWithDatesAndNames.csv")
+fishData <- read.csv("data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv")
 ```
 
 # Mapping
@@ -78,15 +78,24 @@ fishData <- read.csv("data/processedFishDataWithDatesAndNames.csv")
 First, a regular point map of all records. 
 
 ```{r sampling map, warning=FALSE}
-fishHorizonComplete <- fishData %>%
-  select(-c("dwc_year", "dwc_month", "dwc_day")) %>% 
-  drop_na()
+fishHorizonComplete <- fishData |> 
+  select(iDigBio_dwc_decimalLongitude, 
+         iDigBio_dwc_decimalLatitude, 
+         SOcurated_depth, SOcurated_depthUncertainty,
+         SOcurated_maximumDepthInMeters,
+         WoRMS_scientificName, 
+         SOcurated_bibliographicCitation) |> 
+  drop_na(iDigBio_dwc_decimalLongitude, 
+         iDigBio_dwc_decimalLatitude, 
+         SOcurated_depth, SOcurated_depthUncertainty,
+         SOcurated_maximumDepthInMeters,
+         WoRMS_scientificName)
 
 # Get rid of overland points
 fishHorizonComplete <- vect(fishHorizonComplete, 
-                            geom = c("dwc_decimalLongitude", 
-                                     "dwc_decimalLatitude"))
-crs(fishHorizonComplete) <- crs("epsg:4326")
+                            geom = c("iDigBio_dwc_decimalLongitude", 
+                                     "iDigBio_dwc_decimalLatitude"))
+crs(fishHorizonComplete) <- crs("EPSG:4326")
 land <- vect(rnaturalearth::ne_countries(scale = "small", 
                                          returnclass = "sf")[1])
 land <- aggregate(land)
@@ -106,7 +115,7 @@ First, we have to set things up by making a hexagon grid to aggregate the data. 
 ```{r hex map, warning = FALSE}
 # Set to Equal Earth projection
 fishHorizonComplete <- project(fishHorizonComplete, 
-                               "epsg:3857")
+                               "EPSG:3857")
 land <- project(land, crs(fishHorizonComplete))
 
 # Study area
@@ -139,7 +148,7 @@ oceans <- crop(oceans, ext(land))
 my_breaks <- c(1, 10, 50, 100, 500, 1000, 5000, 6000)
 my_col <- rgb(0, 0, 255, max = 255, alpha = 0, names = "clear")
 
-#pdf("Figures/GlobalSamplingDensity.pdf")
+# pdf("Figures/GlobalSamplingDensity.pdf")
 ggplot() + 
   geom_spatvector(data = land, color = "gray50", alpha = .5) +
   geom_spatvector(data = oceans, aes(fill = counts), color = NA) +
@@ -150,7 +159,7 @@ ggplot() +
                              label_axes = list(bottom = "E", left = "N")) +
   ggtitle("Worldwide Sampling Density of Marine Bony Fishes, iDigBio") +
   scale_x_longitude(ticks = 40) + scale_y_latitude(ticks = 30)
-#dev.off()
+# dev.off()
 ```
 
 ## Depth Coverage
@@ -168,7 +177,7 @@ samplingDepth <- NULL
 for (i in 1:length(oceans)){
   refs <- is.related(fishHorizonComplete, oceans[i], "within")
   if(any(refs)){
-    maxDepth <- max(fishHorizonComplete[refs,"dwc_maximumDepthInMeters"], na.rm = TRUE)
+    maxDepth <- max(fishHorizonComplete[refs,"SOcurated_maximumDepthInMeters"], na.rm = TRUE)
   } else {
     maxDepth <- NA
   }
@@ -180,7 +189,7 @@ oceans$samplingRatio <- oceans$maxSample/oceans$bathymetry
 oceans$samplingRatio[oceans$samplingRatio > 1] <- 1
 
 # Put it all together
-#pdf("Figures/GlobalSamplingRatio.pdf")
+# pdf("Figures/GlobalSamplingRatio.pdf")
 ggplot() + 
   geom_spatvector(data = land, color = "gray50", alpha = .5) +
   geom_spatvector(data = oceans, aes(fill = samplingRatio), color = NA) +
@@ -189,7 +198,7 @@ ggplot() +
                              label_axes = list(bottom = "E", left = "N")) +
   ggtitle("Worldwide Depth Sampling Ratio of Marine Bony Fishes, iDigBio") +
   scale_x_longitude(ticks = 40) + scale_y_latitude(ticks = 30)
-#dev.off()
+# dev.off()
 ```
 
 # Summary statistics
@@ -227,11 +236,10 @@ First, we do some additional filtering to fit the data for our use, including re
 ```{r uncertainty filtering}
 # Remove records with excessive uncertainty
 print(paste0("Before removing records with a depth uncertainty of 100m or more, there are ", nrow(fishData), " records."))
-fishData$uncertainty <- fishData$dwc_maximumDepthInMeters - fishData$dwc_minimumDepthInMeters
-fishData <- fishData[fishData$uncertainty < 100,]
+fishData <- fishData[fishData$SOcurated_depthUncertainty < 100,]
 print(paste0("After removing records with a depth uncertainty of 100m or more, there are ", nrow(fishData), " records."))
-fishData <- fishData[str_detect(fishData$dwc_scientificName, " sp\\.", negate = TRUE),]
-fishData <- fishData[str_detect(fishData$dwc_scientificName, "species", negate = TRUE),]
+fishData <- fishData[str_detect(fishData$WoRMS_scientificName, " sp\\.", negate = TRUE),]
+fishData <- fishData[str_detect(fishData$WoRMS_scientificName, "species", negate = TRUE),]
 print(paste0("After removing records that were not identified to species, there are ", nrow(fishData), " records."))
 ```
 
@@ -243,7 +251,7 @@ breakNumber <- 60 # Starts with 60 breaks, which is probably way too many
 test <- TRUE
 while (test){
     breakNumber <- breakNumber - 1
-    tmp <- hist(fishData$depth,  breaks = breakNumber, plot = F)
+    tmp <- hist(fishData$SOcurated_depth,  breaks = breakNumber, plot = F)
     test <- 0 %in% tmp$counts # Checks if there are empty bins
 }
 zeroEmpty <- length(tmp$breaks)
@@ -253,7 +261,7 @@ breakNumber <- 60 # Starts with 60 breaks, which is probably way too many
 test <- TRUE
 while (test){
     breakNumber <- breakNumber - 1
-    tmp <- hist(fishData$depth,  breaks = breakNumber, plot = F)
+    tmp <- hist(fishData$SOcurated_depth,  breaks = breakNumber, plot = F)
     test <- 5 >= min(tmp$counts) # Checks to see if any bins are less than five
 }
 fivePerBin <- length(tmp$breaks)
@@ -271,24 +279,26 @@ rm(tmp, breakNumber, test)
 Next, we define a function to calculate diversity statistics we need for downstream analysis.
 
 ```{r define function to calculate bin stats, message=FALSE, warning=FALSE, fig.show='hide'}
-fishData <- data.frame(fishData)
+fishData <- data.frame(fishData) |> 
+  filter(grepl('\\s', WoRMS_scientificName)) |> # Remove entries not ID'ed to species
+  drop_na(WoRMS_scientificName)
 
 diversityStats <- function(x, binNumber){
   # Get breaks based on equal width bins
-  breaks <- seq(min(x$depth), 
-              max(x$depth), 
-              (max(x$depth) - min(x$depth))/(binNumber))
+  breaks <- seq(min(x$SOcurated_depth), 
+              max(x$SOcurated_depth), 
+              (max(x$SOcurated_depth) - min(x$SOcurated_depth))/(binNumber))
   
   # Species richness per bin
   depthDiversityCount <- NULL
   effort <- NULL
   for(i in 2:length(breaks)){
-    temp <- x %>% filter(depth >= breaks[i-1], breaks[i] >= depth)
+    temp <- x %>% filter(SOcurated_depth >= breaks[i-1], breaks[i] >= SOcurated_depth)
     depthDiversityCount <- c(depthDiversityCount,
-                             length(unique(temp$dwc_scientificName)))
+                             length(unique(temp$WoRMS_scientificName)))
     effort <- c(effort, nrow(temp))
   }
-  x$depthBin <- cut(x$depth, breaks=breaks, 
+  x$SOcurated_depthBin <- cut(x$SOcurated_depth, breaks=breaks, 
                     labels = paste0(round(breaks[-(binNumber+1)], digits = 0), " to ", 
                                     round(breaks[-1], digits = 0)))
   
@@ -328,23 +338,23 @@ How does the observed distribution of diversity compare to a null distribution? 
 
 ```{r null diversity test}
 calcEffortAndAlpha <-function(rawData){
-  effortAndAlpha <- data.frame(table(rawData$data$depthBin))
+  effortAndAlpha <- data.frame(table(rawData$data$SOcurated_depthBin))
   for(i in 1:nrow(effortAndAlpha)){
-    binCommunity <- rawData$data[rawData$data$depthBin == effortAndAlpha$Var1[i],]
-    binCommunity <- binCommunity[complete.cases(binCommunity$depthBin),]
-    effortAndAlpha$alpha[i] <- length(unique(binCommunity$dwc_scientificName))
+    binCommunity <- rawData$data[rawData$data$SOcurated_depthBin == effortAndAlpha$Var1[i],]
+    binCommunity <- binCommunity[complete.cases(binCommunity$SOcurated_depthBin),]
+    effortAndAlpha$alpha[i] <- length(unique(binCommunity$WoRMS_scientificName))
   }
   colnames(effortAndAlpha) <- c("Depth", "Count", "Species_Richness")
   return(effortAndAlpha)
 }
 
-effortAndAlpha <-calcEffortAndAlpha(zeroEmpty)
+effortAndAlpha <- calcEffortAndAlpha(rawData = zeroEmpty)
 
 # Simulate data
 fishDatSim <- zeroEmpty
-fishDatSim$data <- fishDatSim$data[!is.na(fishDatSim$data$depthBin),]
+fishDatSim$data <- fishDatSim$data[!is.na(fishDatSim$data$SOcurated_depthBin),]
 fishDatSim <- lapply(1:100, FUN = function(x) {
-    fishDatSim$data$depthBin <- sample(fishDatSim$data$depthBin)
+    fishDatSim$data$SOcurated_depthBin <- sample(fishDatSim$data$SOcurated_depthBin)
     return(fishDatSim)
   })
 # Calculate species richness
@@ -418,19 +428,20 @@ effortAndAlpha <- effortAndAlpha %>%
 world <- vect(ext(c(-180,180,-90,90)))
 crs(world) <- crs("epsg:4326")
 
-effortAndAlpha$Temperature <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
+effortAndAlpha$Temperature <-
+  rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
   envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
-effortAndAlpha$Salinity <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
+effortAndAlpha$Salinity <- rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
   envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
-effortAndAlpha$AOU <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
+effortAndAlpha$AOU <- rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
   envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
-effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
+effortAndAlpha$Nitrate <- rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
   project(crs(world)) %>% 
   crop(world, mask = TRUE) %>% 
   envDatExtract(mShp = world, breaks = zeroEmpty$breaks)
@@ -456,4 +467,10 @@ P1 <- ggplot(effortAndAlphaLong, aes(Depth, value,
   theme(legend.position="none", axis.title.y = element_blank())
 P1
 ggsave("Figures/WorldClines.png",P1,height = 12, width = 11.4, units = "cm")
+```
+
+# Bibliography of citations provided
+
+```{r bibliography}
+print(sort(unique(fishData$SOcurated_bibliographicCitation)))
 ```
