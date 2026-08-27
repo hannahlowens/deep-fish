@@ -65,36 +65,43 @@ theme_Publication <- function(base_size=10, base_family="sans") {
 Read in data and trim occurrences to area of interest--the Gulf of Mexico.
 
 ```{r read in data and tidy up}
-fishData <- data.frame(read.csv("data/processedFishDataWithDatesAndNames.csv"))
-fishHorizonComplete <- fishData %>%
-  select(-c("dwc_year", "dwc_month", "dwc_day")) %>% 
-  drop_na() %>% 
-  filter(dwc_decimalLongitude > -100) %>% 
-  filter(-70 > dwc_decimalLongitude) %>% 
-  filter(35 > dwc_decimalLatitude)  %>% 
-  filter(dwc_decimalLatitude > 16)
-fishHorizonComplete <- vect(fishHorizonComplete, 
-                            geom = c("dwc_decimalLongitude", 
-                                     "dwc_decimalLatitude"))
-crs(fishHorizonComplete) <- crs("epsg:4326")
-land <- rnaturalearth::ne_countries(scale = "small", 
-                                    returnclass = "sv")
-land <- project(land, crs("epsg: 4326"))
-land <- aggregate(land)
-landFish <- is.related(fishHorizonComplete, land, "within")
-fishHorizonComplete <- fishHorizonComplete[!landFish,]
+fishData <- data.frame(read.csv("data/iDigBioProcessedFishOccurrences_SingerAndOwens.csv"))
+fishData <- fishData |> 
+  select(iDigBio_dwc_decimalLongitude, 
+         iDigBio_dwc_decimalLatitude, 
+         SOcurated_depth, SOcurated_depthUncertainty,
+         SOcurated_minimumDepthInMeters,
+         SOcurated_maximumDepthInMeters,
+         WoRMS_scientificName, 
+         WoRMS_family,
+         SOcurated_bibliographicCitation) |> 
+  drop_na(iDigBio_dwc_decimalLongitude, 
+         iDigBio_dwc_decimalLatitude, 
+         SOcurated_depth, SOcurated_depthUncertainty,
+         SOcurated_minimumDepthInMeters,
+         SOcurated_maximumDepthInMeters,
+         WoRMS_scientificName, 
+         WoRMS_family)
+
+# Get rid of overland points
+fishData <- vect(fishData, 
+                            geom = c("iDigBio_dwc_decimalLongitude", 
+                                     "iDigBio_dwc_decimalLatitude"))
+crs(fishData) <- crs("EPSG:4326")
 
 gomShapefile <- vect("data/GOM/GOM.shp")
-gomShapefile <- project(gomShapefile, crs(fishHorizonComplete))
+gomShapefile <- project(gomShapefile, crs(fishData))
 gomShapefile <- buffer(gomShapefile, 10000)
 gomExtent <- ext(gomShapefile)
-fishHorizonComplete <- crop(fishHorizonComplete, gomShapefile)
+fishData <- crop(fishData, gomShapefile)
 
-landFish <- is.related(fishHorizonComplete, land, "within")
-fishHorizonComplete <- fishHorizonComplete[!landFish,]
+land <- vect(rnaturalearth::ne_countries(scale = "small", 
+                                         returnclass = "sf")[1])
+land <- aggregate(land)
+land <- project(land, crs("EPSG: 4326"))
+landFish <- is.related(fishData, land, "within")
+fishData <- fishData[!landFish,]
 
-gulfFish <- is.related(fishHorizonComplete, gomShapefile, "within")
-fishData <- fishHorizonComplete[gulfFish]
 pointMap(as.data.frame(geom(fishData)), 
          spName = "All Gulf of Mexico\nFish Occurrences in iDigBio",
          land = land)
@@ -106,7 +113,7 @@ First, we have to set things up by making a hexagon grid to aggregate the data. 
 
 ```{r hex map, warning = FALSE}
 # "EPSG:6579 NAD83(2011) / Texas-Centric Albers Equal Area"
-fishData <- project(fishData, "epsg:6579")
+fishData <- project(fishData, "EPSG:6579")
 gomShapefile <- project(gomShapefile, crs(fishData))
 land <- project(land, crs(fishData))
 
@@ -117,6 +124,8 @@ HexPols2 <- st_make_grid(studyArea ,
                          square = FALSE)
 GOM <- vect(HexPols2)
 crs(GOM) <- crs(land)
+GOMland <- is.related(GOM, gomShapefile, "intersects")
+GOM <- GOM[GOMland,]
 ```
 
 ## Sampling Density
@@ -125,7 +134,8 @@ How many records are there in each hexagonal cell?
 
 ```{r sampling density}
 # Gridding it
-point_density <- extract(x = GOM, y = fishData)
+point_density <- terra::extract(x = GOM, y = fishData)
+fishData$hexID <- point_density[,2]
 point_density <- table(point_density[,2])
 counts <- NULL
 for ( i in 1:length(GOM)){
@@ -143,7 +153,7 @@ my_breaks <- c(1, 10, 50, 100, 500, 1000, 5000, 6000)
 my_col <- rgb(0, 0, 255, max = 255, 
               alpha = 0, names = "clear")
 
-#pdf(file = "Figures/GOMDiversity.pdf")
+# pdf(file = "Figures/GOMDiversity.pdf")
 ggplot() + 
   geom_spatvector(data = land, 
                   color = "gray50", 
@@ -160,7 +170,7 @@ ggplot() +
            label_graticule = "SW") +
   ggtitle("Gulf of Mexico Sampling Density of\nMarine Bony Fishes, iDigBio") +
   scale_x_longitude(ticks = 5) + scale_y_latitude(ticks = 5)
-#dev.off()
+# dev.off()
 ```
 
 ## Depth Coverage
@@ -169,9 +179,9 @@ This map highlights regions of the ocean with differing depth coverage of sampli
 ```{r depth sampling, warning=FALSE}
 # Get bathymetery
 bathymetry <- rast("data/ETOPO_2022_v1_60s_N90W180_bed.tif") %>%
-  crop(ext(project(GOM, crs("epsg:4326")))) %>% 
+  crop(ext(project(GOM, crs("EPSG:4326")))) %>% 
   project(crs(GOM), method = "min")
-GOM$bathymetry <- extract(x = bathymetry, y = GOM, fun = min)[,2]
+GOM$bathymetry <- terra::extract(x = bathymetry, y = GOM, fun = min)[,2]
 GOM$bathymetry[GOM$bathymetry > 0] <- NA
 
 # Get sampling depth
@@ -179,7 +189,7 @@ samplingDepth <- NULL
 for (i in 1:length(GOM)){
   refs <- is.related(fishData, GOM[i], "within")
   if(any(refs)){
-    maxDepth <- max(fishData[refs,"dwc_maximumDepthInMeters"], 
+    maxDepth <- max(fishData[refs,"SOcurated_maximumDepthInMeters"], 
                     na.rm = TRUE)
   } else {
     maxDepth <- NA
@@ -192,7 +202,7 @@ GOM$samplingRatio <- GOM$maxSample/GOM$bathymetry
 GOM$samplingRatio[GOM$samplingRatio > 1] <- 1
 
 # Put it all together
-#pdf("Figures/GOMSamplingRatio.pdf")
+# pdf("Figures/GOMSamplingRatio.pdf")
 ggplot() +
   geom_spatvector(data = land, 
                   color = "gray50", 
@@ -210,7 +220,7 @@ ggplot() +
   ggtitle("Gulf of Mexico Sampling vs Available Depth Ratio\nof Marine Bony Fishes, iDigBio") +
   scale_x_longitude(ticks = 5) + 
   scale_y_latitude(ticks = 5)
-#dev.off()
+# dev.off()
 ```
 
 # Diversity Pattern Analyses
@@ -220,11 +230,11 @@ First, we do some additional filtering to fit the data for our use, including re
 ```{r uncertainty filtering, echo = FALSE}
 # Remove records with excessive uncertainty
 print(paste0("Before removing records with a depth uncertainty of 100m or more, there are ", nrow(fishData), " records."))
-fishData$uncertainty <- fishData$dwc_maximumDepthInMeters - fishData$dwc_minimumDepthInMeters
-fishData <- fishData[fishData$uncertainty < 100,]
+fishData <- fishData[fishData$SOcurated_depthUncertainty < 100,]
 print(paste0("After removing records with a depth uncertainty of 100m or more, there are ", nrow(fishData), " records."))
-fishData <- fishData[str_detect(fishData$dwc_scientificName, " sp\\.", negate = TRUE),]
-fishData <- fishData[str_detect(fishData$dwc_scientificName, "species", negate = TRUE),]
+fishData <- data.frame(fishData) |> 
+  filter(grepl('\\s', WoRMS_scientificName)) |> # Remove entries not ID'ed to species
+  drop_na(WoRMS_scientificName)
 print(paste0("After removing records that were not identified to species, there are ", nrow(fishData), " records."))
 ```
 
@@ -236,7 +246,7 @@ breakNumber <- 60
 test <- TRUE
 while (test){
     breakNumber <- breakNumber - 1
-    tmp <- hist(fishData$depth,  
+    tmp <- hist(fishData$SOcurated_depth,  
                 breaks = breakNumber, 
                 plot = F)
     test <- 0 %in% tmp$counts
@@ -248,7 +258,7 @@ breakNumber <- 60
 test <- TRUE
 while (test){
     breakNumber <- breakNumber - 1
-    tmp <- hist(fishData$depth,  
+    tmp <- hist(fishData$SOcurated_depth,  
                 breaks = breakNumber, 
                 plot = F, )
     test <- 10 >= min(tmp$counts)# Checks to see if any bins are less than ten
@@ -270,32 +280,36 @@ Next, we define a function to calculate diversity statistics we need for downstr
 ```{r define function to calculate bin stats, fig.show='hide', message=FALSE, warning=FALSE}
 fishData <- data.frame(fishData)
 
+fishData <- data.frame(fishData) |> 
+  filter(grepl('\\s', WoRMS_scientificName)) |> # Remove entries not ID'ed to species
+  drop_na(WoRMS_scientificName)
+
 diversityStats <- function(x, binNumber){
   # Get breaks based on equal width bins
-  breaks <- seq(min(x$depth), 
-              max(x$depth), 
-              (max(x$depth) - min(x$depth))/(binNumber))
+  breaks <- seq(min(x$SOcurated_depth), 
+              max(x$SOcurated_depth), 
+              (max(x$SOcurated_depth) - min(x$SOcurated_depth))/(binNumber))
   
   # Species richness per bin
   depthDiversityCount <- NULL
   effort <- NULL
   for(i in 2:length(breaks)){
-    temp <- x %>% filter(depth >= breaks[i-1], 
-                         breaks[i] >= depth)
+    temp <- x %>% filter(SOcurated_depth >= breaks[i-1], 
+                         breaks[i] >= SOcurated_depth)
     depthDiversityCount <- c(depthDiversityCount,
-                             length(unique(temp$dwc_scientificName)))
+                             length(unique(temp$WoRMS_scientificName)))
     effort <- c(effort, nrow(temp))
   }
-  x$depthBin <- cut(x$depth, breaks=breaks, 
+  x$SOcurated_depthBin <- cut(x$SOcurated_depth, breaks=breaks, 
                     labels = paste0(round(breaks[-(binNumber+1)], 
                                           digits = 0), " to ", 
                                     round(breaks[-1], 
                                           digits = 0)))
   
   # Compile data -- Spp are columns, sites are rows, counts are cells
-  depthComm <- data.frame(table(data.frame(x[c("depthBin", 
-                                               "dwc_scientificName")])))
-  depthComm <- as.data.frame.matrix(xtabs(Freq ~ depthBin + dwc_scientificName, 
+  depthComm <- data.frame(table(data.frame(x[c("SOcurated_depth", 
+                                               "WoRMS_scientificName")])))
+  depthComm <- as.data.frame.matrix(xtabs(Freq ~ SOcurated_depth + WoRMS_scientificName, 
                                           depthComm))
   diversityResults <- data.frame(row.names = row.names(depthComm))
   diversityResults$bin <- seq(1, nrow(depthComm))
@@ -388,11 +402,11 @@ How does the observed distribution of diversity compare to a null distribution? 
 
 ```{r null diversity test}
 calcEffortAndAlpha <-function(rawData){
-  effortAndAlpha <- data.frame(table(rawData$data$depthBin))
+  effortAndAlpha <- data.frame(table(rawData$data$SOcurated_depthBin))
   for(i in 1:nrow(effortAndAlpha)){
-    binCommunity <- rawData$data[rawData$data$depthBin == effortAndAlpha$Var1[i],]
-    binCommunity <- binCommunity[complete.cases(binCommunity$depthBin),]
-    effortAndAlpha$alpha[i] <- length(unique(binCommunity$dwc_scientificName))
+    binCommunity <- rawData$data[rawData$data$SOcurated_depthBin == effortAndAlpha$Var1[i],]
+    binCommunity <- binCommunity[complete.cases(binCommunity$SOcurated_depthBin),]
+    effortAndAlpha$alpha[i] <- length(unique(binCommunity$WoRMS_scientificName))
   }
   colnames(effortAndAlpha) <- c("Depth", "Count", "Species_Richness")
   return(effortAndAlpha)
@@ -400,9 +414,9 @@ calcEffortAndAlpha <-function(rawData){
 
 # Simulate data
 fishDatSim <- tenPerBin
-fishDatSim$data <- fishDatSim$data[!is.na(fishDatSim$data$depthBin),]
+fishDatSim$data <- fishDatSim$data[!is.na(fishDatSim$data$SOcurated_depthBin),]
 fishDatSim <- lapply(1:100, FUN = function(x) {
-    fishDatSim$data$depthBin <- sample(fishDatSim$data$depthBin)
+    fishDatSim$data$SOcurated_depthBin <- sample(fishDatSim$data$SOcurated_depthBin)
     return(fishDatSim)
   })
 # Calculate species richness
@@ -437,25 +451,28 @@ ggsave("Figures/DiversityObsVsSimGOM.png",finalPlot,height = 8.7, width = 11.4, 
 ```
 ## Possible correlates with species richness
 
-### Number of records and area covered
+### Extracting the data
 
-Of course, there are plenty of non-biological reasons diversity might decrease with depth. Two of our hypothesized correlations were decreased sampling effort and amount of available area as depth increases.
+First, we extract the species richness and record counts for each depth bin in each hexagon. 
 
 ```{r Sampling effort versus species richness}
-effortAndAlpha$availableArea <- NA
-gomBath <- mask(x = bathymetry, mask= gomShapefile)
-cellBath <- cellSize(gomBath, unit = "km")
-for (i in 1:nrow(effortAndAlpha)){
-  depths <- as.numeric(unlist(strsplit(as.character(effortAndAlpha$Depth[i]), 
-                                       " to ")))
-  effortAndAlpha$availableArea[i] <- unlist(global(((gomBath < -(depths[1])) * cellBath), 
-                                                   sum, na.rm = T))
+breaks <- tenPerBin$breaks
+effortAndAlpha3D <- NULL
+for(i in 2:length(breaks)){
+  temp <- fishData %>% 
+    filter(SOcurated_depth >= breaks[i-1], breaks[i] >= SOcurated_depth) %>% 
+    group_by(hexID) %>% 
+    summarise(alpha = n_distinct(WoRMS_scientificName), count = n())
+  
+  effortAndAlpha3D <- rbind(effortAndAlpha3D, 
+                      data.frame(temp, depthBin = paste(round(breaks[i-1]), "to",
+                                               round(breaks[i]))))
 }
 ```
 
-### Correlation between clines and diversity
+### Extracting environmental correlates
 
-It was suggested by Katherine Richardson, Owens's colleague at the University of Copenhagen, that the bump in the diversity decay curve could be the result of thermoclines and/or pycnoclines. We used temperature and salinity data from the World Ocean Atlas 2018 dataset to investigate this idea, extracting mean temperature and salinity for each depth bin and comparing it to diversity. We also examined apparent oxygen utilization and nitrogen concentration as potential correlates, as these variables are also available via the WOA 2018 dataset and may be correlated with diversity.
+It was suggested by Katherine Richardson, Owens's colleague at the University of Copenhagen, that the bump in the diversity decay curve could be the result of thermoclines and/or pycnoclines. We used temperature and salinity data from the World Ocean Atlas 2018 dataset to investigate this idea, extracting mean temperature and salinity for each depth bin within each hexagon. We also examined apparent oxygen utilization and nitrogen concentration as potential correlates.
 
 ```{r environmental variable extraction}
 # Define extraction function
@@ -463,45 +480,80 @@ envDatExtract <- function(envRaster, mShp, breaks){
   # Get all the points
   dummyOccs <- data.frame(0, 0, 0)
   colnames(dummyOccs) <- c("longitude", "latitude", "depth")
-  grid <- mSampling3D(occs = dummyOccs, 
-                      envBrick = envRaster, 
-                      mShp = mShp, verbose = F)
-  allData <- cbind(grid, 
-                 xyzSample(grid, envBrick = envRaster, verbose = F))
-  colnames(allData) <- c("longitude", "latitude", "depth", "Variable")
-  
-  # Assign points to bins and calculuate summary stats
-  binSampledData <- NULL
-  for(i in 2:length(breaks)){
-    temp <- allData %>% filter(depth >= breaks[i-1], breaks[i] >= depth)
-    binSampledData <- c(binSampledData, mean(temp[,4]))
+  catData <- NULL
+  for(i in 1:length(mShp)){
+    grid <- mSampling3D(occs = dummyOccs, 
+                        envBrick = envRaster, 
+                        mShp = mShp[i], verbose = F)
+    allData <- cbind(grid, 
+                     xyzSample(grid, envBrick = envRaster, verbose = F))
+    colnames(allData) <- c("longitude", "latitude", "depth", "Variable")
+    
+    # Assign points to bins and calculate summary stats
+    sumData <- NULL
+    for(j in 2:length(breaks)){
+      temp <- allData %>% filter(depth >= breaks[j-1], breaks[j] >= depth)
+      sumData <- rbind(sumData,
+                       data.frame(Variable = mean(temp$Variable),
+                                  depthBin = paste(round(breaks[j-1]), "to",
+                                                round(breaks[j]))))
+    }
+    catData <- rbind(catData, data.frame(hexID = i, sumData))
   }
-  return(binSampledData)
+  return(catData)
 }
 
-effortAndAlpha$"Available Area" <-effortAndAlpha$availableArea
-effortAndAlpha <- select(effortAndAlpha, -c("availableArea"))
+envtData <- rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
+  project(crs(gomShapefile)) %>% 
+  crop(gomShapefile) %>% 
+  mask(mask = gomShapefile) %>% 
+  envDatExtract(mShp = GOM, breaks = tenPerBin$breaks)
+colnames(envtData) <- c("hexID", "Temperature", "depthBin")
 
-effortAndAlpha$Temperature <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/temperature.tif") %>%
+envtData <- merge(envtData, rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
   project(crs(gomShapefile)) %>% 
   crop(gomShapefile) %>% 
   mask(mask = gomShapefile) %>% 
-  envDatExtract(mShp = gomShapefile, breaks = tenPerBin$breaks)
-effortAndAlpha$Salinity <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/salinity.tif")  %>% 
+  envDatExtract(mShp = GOM, breaks = tenPerBin$breaks))
+colnames(envtData)[ncol(envtData)] <- "Salinity"
+
+envtData <- merge(envtData,
+                  rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
   project(crs(gomShapefile)) %>% 
   crop(gomShapefile) %>% 
   mask(mask = gomShapefile) %>% 
-  envDatExtract(mShp = gomShapefile, breaks = tenPerBin$breaks)
-effortAndAlpha$AOU <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/AOU.tif") %>%
+  envDatExtract(mShp = GOM, breaks = tenPerBin$breaks))
+colnames(envtData)[ncol(envtData)] <- "AOU"
+
+envtData <- merge(envtData,
+                  rast("~/Dropbox/DeepFishOccurrences/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
   project(crs(gomShapefile)) %>% 
   crop(gomShapefile) %>% 
   mask(mask = gomShapefile) %>% 
-  envDatExtract(mShp = gomShapefile, breaks = tenPerBin$breaks)
-effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/ProcessedEnvtData/nitrate.tif") %>%
-  project(crs(gomShapefile)) %>% 
-  crop(gomShapefile) %>% 
-  mask(mask = gomShapefile) %>% 
-  envDatExtract(mShp = gomShapefile, breaks = tenPerBin$breaks)
+  envDatExtract(mShp = GOM, breaks = tenPerBin$breaks))
+colnames(envtData)[ncol(envtData)] <- "Nitrate"
+
+envtData$maxBinDepth <- as.numeric(unlist(strsplit(as.character(envtData$depthBin),
+                                                         " "))[seq(from = 3, 
+                                                                   to = nrow(envtData) * 3, 
+                                                                   by = 3)])
+mergedData <- merge(envtData, effortAndAlpha3D[,c(1,4,2,3)])
+```
+
+Once the data were extracted, we modeled species richness within each depth bin within each hexagon as a function of the number of records, depth, temperature, salinty, AOU, and nitrate. Given the extreme right skew of the data, we used a Poisson distribution. Temperature, salinity, and nitrate had strong variance inflation factors. Once these variables were removed, there was a strong positive correlation between species richness and counts, and a weak negative correlation between species richness and the maximum depth of the bin (both statistically significant). 
+
+```{r species richness model}
+richnessModel <- glm(data = mergedData, alpha ~ maxBinDepth + count + Temperature + Salinity + AOU + Nitrate, poisson(link="identity"))
+summary(richnessModel)
+vif(richnessModel)
+
+richnessModel <- glm(data = mergedData, alpha ~ maxBinDepth + count + AOU,
+                     poisson(link="identity"))
+summary(richnessModel)
+vif(richnessModel)
+
+convenienceEffect <- lm(data = mergedData, count ~ maxBinDepth)
+summary(convenienceEffect)
 ```
 
 ### Plotting
@@ -509,14 +561,14 @@ effortAndAlpha$Nitrate <- rast("~/Dropbox/MARDIGRA/data/EnvironmentalData/Proces
 Finally, we plot alpha diversity and its hypothesized correlates to identify emergent trends.
 
 ```{r, fig.height = 10}
-effortAndAlphaLong <- reshape2::melt(effortAndAlpha[,c("Depth", "Species_Richness", 
-                                                        "Count", "Available Area",
-                                                        "Temperature", "Salinity", 
-                                                        "AOU", "Nitrate")], 
-                                      id.vars = "Depth")
+effortAndAlphaLong <- reshape2::melt(mergedData[,c("maxBinDepth", "alpha",
+                                                   "count","Temperature", 
+                                                   "Salinity","AOU", "Nitrate")], 
+                                      id.vars = "maxBinDepth")
+effortAndAlphaLong <- aggregate(effortAndAlphaLong, value ~ maxBinDepth + variable, mean)
 
-P1 <- ggplot(effortAndAlphaLong, aes(Depth, value, 
-                                      colour = variable, group = 1)) +
+P1 <- ggplot(effortAndAlphaLong, aes(maxBinDepth, value,
+                             colour = variable, group = 1)) +
   geom_line() +
   theme_Publication() + 
   labs( x = "Depth (m)") +
@@ -533,7 +585,7 @@ ggsave("Figures/GOMClines.png",P1,height = 22.5, width = 8.7, units = "cm")
 Finally, here are some sampling stats.
 
 ```{r a few summary stats, echo=FALSE}
-print(paste0("There are ", length(unique(fishData$dwc_scientificName)), 
+print(paste0("There are ", length(unique(fishData$WoRMS_scientificName)), 
              " species in the GOM dataset."))
 
 print(paste0("There are ", nrow(GOM), 
@@ -672,32 +724,36 @@ tenPerBin$spClusters[tenPerBin$spClusters$p.value < 0.01,]
 
 ## Depth ranges
 
-Finally, let's look at depth ranges for species that have enough data (n > 9). In particular, we are interested in testing the hypothesis that species' depth ranges are correlated with minimum depth (that is, the deeper species are, the broader their known depth range). We calculate maximum and minimum depth as the 95th and 5th percentile of maximum and minimum possible depth of each species from individual records, in order to account for noise in the data.
+Finally, let's look at depth ranges for species that have enough data (n > 9). In particular, we are interested in testing the hypothesis that species' depth ranges are correlated with minimum depth (that is, the deeper species are, the broader their known depth range). We calculate maximum and minimum depth as the 95th and 5th percentile of maximum and minimum possible depth of each species from individual records, in order to account for noise in the data. Dotted lines on both plot axes correspond with 200m (blue) and 1000m (red).
 
 First, how do these data look?
 
 ```{r plot depth ranges, warning=FALSE}
 depthRanges <- fishData %>% 
-  group_by(dwc_scientificName) %>% 
+  group_by(WoRMS_scientificName) %>% 
   summarise(count = n(),
-            depthMin=quantile(dwc_minimumDepthInMeters, probs = .05),
-            depthMax=quantile(dwc_maximumDepthInMeters, probs = .95),
-            family = dwc_family[1])
+            depthMin=quantile(SOcurated_minimumDepthInMeters, probs = .05),
+            depthMax=quantile(SOcurated_maximumDepthInMeters, probs = .95),
+            family = WoRMS_family[1])
 depthRanges <- depthRanges %>% 
   filter(count > 9) %>% 
   mutate(depthRange = depthMax - depthMin) %>% 
   arrange(depthMin, depthMax, family)
 
 ggplot()+
-   geom_linerange(data=depthRanges,
-                  aes(x=depthMin, 
-                      ymin=depthMin, 
-                      ymax=depthMax), 
-                  linewidth=.5, alpha=0.5) +
   xlab("Minimum Depth (m)") +
   ylab("Depth (m)") +
   labs(title = "Species' Depth Ranges Ordered by Minimum Depth") +
   theme(plot.caption = element_text(hjust=1)) +
+  #geom_hline(aes(yintercept = c(200,1000), col = "darkred"), lty = "dashed", show.legend = F) +
+  #geom_vline(aes(xintercept = c(200,1000), col = "darkred"), lty = "dashed", show.legend = F) +
+  geom_linerange(data=depthRanges,
+                  aes(x=depthMin, 
+                      ymin=depthMin, 
+                      ymax=depthMax), 
+                  linewidth=.5, alpha=0.5) +
+  scale_x_continuous(limits = c(0, 4350)) +
+  scale_y_continuous(limits = c(0, 7150)) +
   theme_bw()
 ```
 
@@ -711,3 +767,9 @@ summary(model)
 ```
 
 As you can see, the model does not describe the variance very well, and most of the variance in depth range is explained by the number of measurements available for each species. So this is a very inconclusive test--much more and cleaner data is needed to more conclusively test this question.
+
+# Bibliography of citations provided
+
+```{r bibliography}
+print(sort(unique(fishData$SOcurated_bibliographicCitation)))
+```
